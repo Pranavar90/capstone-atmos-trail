@@ -1,0 +1,36 @@
+# Datasets
+data/
+*.zip
+*.rar
+
+# Models and Outputs
+outputs/checkpoints/
+outputs/plots/
+outputs/inference/
+*.pth
+*.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Kaggle API
+kaggle.json
+.kaggle/
