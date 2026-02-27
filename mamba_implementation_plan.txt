@@ -1,0 +1,122 @@
+================================================================================
+VISION MAMBA (VIM) DEHAZING IMPLEMENTATION PLAN & ARCHITECTURE
+Track 2: Physics-Guided State Space Models for Target 96%+ Accuracy
+================================================================================
+
+1. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+This plan outlines the complete replacement of the standard U-Net with a 
+Vision Mamba (Vim) backbone for single image dehazing. This architecture aims to 
+achieve >96% structural accuracy on seen data and highly robust generalization 
+on out-of-distribution (OOD) real-world data (such as colored smog) while 
+maintaining strict <4GB VRAM constraints (RTX 3050).
+
+2. CORE ARCHITECTURE DIAGRAM
+--------------------------------------------------------------------------------
+Below is the data flow for the Hybrid Vim-Physics Dehazer:
+
+       [ Input Hazy Image $I(x)$ ]
+                 │
+                 ▼
+         (Domain-Randomized Haze Augmentation) -- *Crucial for OOD generalization*
+                 │
+                 ▼
+       [ Patch Embedding Layer ] --> Flattens 2D image into 1D Sequence vectors
+                 │
+                 ▼
+    +---------------------------------------------------+
+    | VISUAL STATE SPACE (VIM) BLOCKS                   |
+    |  - Multi-Directional Scanning (Forward/Backward)  |
+    |  - Maintains global hidden state (Memory)         |
+    |  - Linear complexity O(N), VRAM friendly          |
+    +---------------------------------------------------+
+                 │
+      +----------┴----------+
+      │                     │
+      ▼                     ▼
+[ Global Avg Pool ]   [ Feature Unflatten (1D->2D) ]
+      │                     │
+      ▼                     ▼
+[ FC Layers ]         [ Shallow CNN Refinement ]
+      │                     │
+      ▼                     ▼
+  Est. Atmos.           Est. Trans.
+   Light $A$             Map $t(x)$
+      │                     │
+      +----------+----------+
+                 │
+                 ▼
+    +---------------------------------------------------+
+    |    PHYSICS INVERSION (Koschmieder Equation)       |
+    |    $J(x) = (I(x) - A) / max(t(x), \epsilon) + A$   |
+    +---------------------------------------------------+
+                 │
+                 ▼
+    [ Dehazed Output Radiance $J(x)$ ]
+                 │
+                 ▼
+    +---------------------------------------------------+
+    |                  LOSS FUNCTIONS                   |
+    | 1. L1 / MSE Loss                                  |
+    | 2. SSIM Loss (Structural Integrity)               |
+    | 3. AECR Contrastive Loss (Prevents Hallucination) |
+    +---------------------------------------------------+
+
+3. DETAILED IMPLEMENTATION PHASES
+--------------------------------------------------------------------------------
+
+PHASE 1: DATA AUGMENTATION & PIPELINE UPGRADE (Generalization Focus)
+- Objective: Prevent the model from overfitting to neutral grey synthetic haze.
+- Tasks:
+  a. Implement `HazeColorShift` augmentation in PyTorch: Randomly introduces warm 
+     (golden), cool (blue), or brown color casts to the hazy inputs during training.
+  b. Implement `DensityJitter`: Randomly alters the synthetic beta scattering 
+     coefficient so Mamba learns physics, not specific dataset pixel values.
+
+PHASE 2: VISION MAMBA (VIM) BACKBONE INTEGRATION
+- Objective: Replace the U-Net encoder with linear-complexity SSM blocks.
+- Tasks:
+  a. Import `mamba-ssm` (optimized CUDA kernel required) or a lightweight PyTorch 
+     equivalent approximation if CUDA binaries cause Windows dependency issues.
+  b. Build a Patch Embedding layer to divide the 256x256 image into non-overlapping 
+     patches (e.g., 4x4 or 8x8), projecting them to an embedding dimension $D$.
+  c. Build the `VimBlock` featuring continuous multi-directional sweeps 
+     (left-to-right, right-to-left) to retain spatial context while achieving a 
+     global receptive field.
+
+PHASE 3: HYBRID PREDICTION HEADS
+- Objective: Predict accurate $t(x)$ and $A$ from the Mamba global sequence.
+- Tasks:
+  a. Transmission Map $t(x)$: Unflatten the 1D Mamba output back into a 2D 
+     spatial grid. Apply a fast 3x3 depthwise-separable CNN sequence to 
+     restore local edge connectivity (reversing the low-pass filter effect of SSMs).
+  b. Atmospheric Light $A$: Apply 1D Global Average Pooling across the Mamba 
+     sequence, feeding into a 2-layer MLP to output the global 3-channel (RGB) 
+     $A$ vector.
+
+PHASE 4: LOSS FUNCTION STABILIZATION
+- Objective: Prevent NaN explosion during Koschmieder inversion and stop hallucination.
+- Tasks:
+  a. `AECRContrastiveLoss`: Implement using VGG-19 features (layers relu1_2, 
+     relu2_2, relu3_2) measuring distance between positive pairs (Output/Clear) 
+     and negative pairs (Output/Hazy).
+  b. `SSIMLoss`: Fully integrate local structural similarity measurement.
+  c. Enable extreme gradient clipping (`torch.nn.utils.clip_grad_norm_`) and 
+     a linear warmup learning rate scheduler to let the SSM state matrices 
+     stabilize before applying large parameter updates.
+
+4. EXPECTED CHALLENGES & MITIGATIONS
+--------------------------------------------------------------------------------
+- Challenge: `mamba-ssm` CUDA compilation on Windows.
+  Mitigation: If Triton/CUDA binaries fail on Windows, fallback to a Pure PyTorch 
+  implementation of State Space Models (e.g., `S4` or minimal `Mamba` ports) 
+  which trade slight speed for perfect compatibility.
+- Challenge: NaN gradients in the first 5 epochs.
+  Mitigation: Clamp $t(x)$ aggressively between `[0.05, 1.0]` and use a 10-epoch 
+  CosineAnnealing warmup schedule.
+
+5. INFRASTRUCTURE & REPO IMPACT
+--------------------------------------------------------------------------------
+The codebase in the `mamba` branch will deprecate `models/arch.py` and introduce 
+`models/mamba_arch.py`. The `train.py` script will be heavily modified to 
+support domain-randomized augmentations and the multi-component loss function.
