@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
+
+:root {
+    --primary: #6366f1;
+    --primary-glow: rgba(99, 102, 241, 0.4);
+}
+
+body {
+    @apply bg-[#020617] text-slate-50 font-['Outfit'] min-h-screen antialiased;
+    background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #020617 50%);
+}
+
+.glass-card {
+    @apply bg-slate-900/40 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl transition-all duration-300;
+}
+
+.glass-card:hover {
+    @apply border-indigo-500/30 bg-slate-900/50 -translate-y-1;
+}
+
+.btn-primary {
+    @apply w-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-semibold py-4 rounded-xl shadow-lg shadow-indigo-500/30 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2;
+}
+
+@keyframes pulse-slow {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.5;
+        transform: scale(1.1);
+    }
+}
+
+.animate-pulse-slow {
+    animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

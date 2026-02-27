@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-multipart
+torch
+torchvision
+opencv-python
+tqdm
+optuna
+matplotlib
+numpy
+pillow
+axios
+kaggle
