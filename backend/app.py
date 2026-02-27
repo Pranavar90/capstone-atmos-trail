@@ -41,8 +41,7 @@ def predict():
     dehazed.save(dehazed_path)
     
     # For simplicity, we return the dehazed image as response
-    # In a full app, we might return URLs or base64
-    return send_file(dehazed_path, mimetype='image/png')
+    return send_file(os.path.abspath(dehazed_path), mimetype='image/png')
 
 @app.route("/status", methods=["GET"])
 def status():

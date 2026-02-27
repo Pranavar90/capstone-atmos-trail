@@ -34,7 +34,9 @@ def fast_psnr(img1, img2):
 class DehazeTrainer:
     def __init__(self, config):
         self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            print(f"Forcing training on: {torch.cuda.get_device_name(0)}")
         
         self.model = AttentionUNetDehaze().to(self.device)
         self.physics = PhysicsReconstruction().to(self.device)
@@ -97,6 +99,13 @@ class DehazeTrainer:
             'config': self.config,
             'history': self.history
         }, path)
+
+    def load_checkpoint(self, path):
+        checkpoint = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.history = checkpoint.get('history', self.history)
+        return checkpoint.get('config', self.config)
 
     def plot_history(self):
         plt.figure(figsize=(10, 5))

@@ -130,10 +130,49 @@ npm run dev
 
 ---
 
+---
+
+## ⚠️ Current Limitations & Hallucination Analysis
+
+While the current model effectively removes haze from synthetic in-distribution datasets (RESIDE, Dense-Haze), it exhibits significant limitations when applied to real-world, out-of-distribution (OOD) hazy images.
+
+### 1. The Hallucination Problem
+When presented with real-world hazy scenes (e.g., grey/white concrete buildings in dense fog), the model frequently hallucinates vibrant, incorrect colors (like vivid yellows, blues, and reds).
+**Root Cause:** The model learns statistical associations from its training data (e.g., "rectangular shapes under haze are usually colorful buildings"). At inference time, it guesses these colors rather than recovering true pixel values. It pattern-matches to its training distribution instead of solving the true inverse problem.
+
+### 2. The Atmospheric Light ($A$) Estimation Gap
+The training datasets primarily feature neutral grey synthetic haze. Real-world scenes often feature color-shifted haze (e.g., warm golden sunlight or smog).
+**Root Cause:** The model's tiny fully-connected network estimates $A$ from deep bottleneck features. When it encounters warm haze, it misinterprets the atmospheric light, causing the Koschmieder physics formula to subtract incorrect values, amplifying warmth instead of neutralizing it.
+
+### 3. L1 Loss Induced Blurriness
+Outputs often lack high-frequency detail and appear washed out.
+**Root Cause:** The model is trained primarily with L1 loss, which minimizes median pixel error. When uncertain, it generates a "safe" blurry average. Furthermore, the SSIM loss term is structurally missing from the training loop, meaning structural integrity is not enforced.
+
+---
+
+## 🔮 Future R&D Solution Tracks
+
+To elevate the model from a basic physics-prior CNN to a robust real-world dehazer, the following research tracks have been identified based on state-of-the-art literature:
+
+### Track 1: Fix the Training Signal (High Impact, Low Effort)
+- **Contrastive Regularization (AECR-Net):** Add a contrastive loss term to penalize the model for generating structural content that doesn't exist in the input, forcing it to recover rather than invent colors.
+- **Implement SSIM & Perceptual Loss:** Wire the missing SSIM loss and extract perceptual features from shallower VGG layers (`relu1_2`, `relu2_2`) to preserve texture and color constancy.
+
+### Track 2: Ground the Physics (Medium Impact, Medium Effort)
+- **Dark Channel Prior (DCP) Guidance:** Do not let the network freely predict the transmission map $t(x)$ from scratch. Use DCP (He et al., 2009) to establish a physics-grounded mathematical boundary that the network only refines.
+- **Analytic $A$ Estimation:** Replace the neural network prediction of $A$ with a quad-tree bright-pixel search algorithm to dynamically capture true scene illumination.
+
+### Track 3: Architectural Overhaul (SOTA Target)
+- **End-to-End Regression (AOD-Net style):** Drop explicit $A$ and $t(x)$ prediction entirely. Reformulate the network to predict a single unified transform parameter $K(x)$, avoiding the error amplification inherent in division by small $t(x)$ values.
+- **Feature Fusion Attention (FFA-Net):** Replace the standard U-Net with Pixel/Channel attention blocks to handle non-uniform real-world haze.
+- **GAN / Cyclic Training:** Introduce a Discriminator or use CycleGAN training paradigms to enforce that dehazed outputs definitively belong to the domain of "real, clear photos".
+
+---
+
 ## 📊 Evaluation & Metrics
 
 The training script automatically logs per-epoch results and generates curves. Metrics tracked:
-- **PSNR**: Peak Signal-to-Noise Ratio (Higher is better)
+- **PSNR**: Peak Signal-to-Noise Ratio (Higher is better). Current baseline: ~18.3 dB.
 - **SSIM**: Structural Similarity Index (Approaching 1.0 is better)
 - **L1 Loss**: Pixel-wise intensity consistency.
 - **Physics Loss**: Consistency between prediction and the scattering model.

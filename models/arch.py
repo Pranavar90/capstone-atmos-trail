@@ -58,15 +58,15 @@ class AttentionUNetDehaze(nn.Module):
 
         self.Up4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.Att4 = AttentionBlock(F_g=base_ch*8, F_l=base_ch*4, F_int=base_ch*4)
-        self.Up_conv4 = ConvBlock(ch_in=base_ch*8, ch_out=base_ch*4)
+        self.Up_conv4 = ConvBlock(ch_in=base_ch*12, ch_out=base_ch*4)
 
         self.Up3 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.Att3 = AttentionBlock(F_g=base_ch*4, F_l=base_ch*2, F_int=base_ch*2)
-        self.Up_conv3 = ConvBlock(ch_in=base_ch*4, ch_out=base_ch*2)
+        self.Up_conv3 = ConvBlock(ch_in=base_ch*6, ch_out=base_ch*2)
 
         self.Up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.Att2 = AttentionBlock(F_g=base_ch*2, F_l=base_ch, F_int=base_ch)
-        self.Up_conv2 = ConvBlock(ch_in=base_ch*2, ch_out=base_ch)
+        self.Up_conv2 = ConvBlock(ch_in=base_ch*3, ch_out=base_ch)
 
         # Head for Transmission Map
         self.Conv_1x1 = nn.Conv2d(base_ch, output_ch, kernel_size=1, stride=1, padding=0)

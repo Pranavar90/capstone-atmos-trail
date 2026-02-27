@@ -11,13 +11,13 @@ import random
 # ========================
 EPOCHS = 50
 LEARNING_RATE = 1e-4
-BATCH_SIZE = 4
-IMAGE_SIZE = 256
+BATCH_SIZE = 6
+IMAGE_SIZE = 384
 PHYSICS_LOSS_WEIGHT = 0.2
 PERCEPTUAL_LOSS_WEIGHT = 0.1
 USE_MIXED_PRECISION = True
-GRAD_ACCUM_STEPS = 2
-NUM_WORKERS = 4
+GRAD_ACCUM_STEPS = 1
+NUM_WORKERS = 2
 SEED = 42
 
 random.seed(SEED)
@@ -89,9 +89,18 @@ def run_training():
     print(f"Dataset Size: Train={len(train_ds)}, Val={len(val_ds)}")
     
     trainer = DehazeTrainer(config)
+    start_epoch = 0
+    checkpoint_path = "outputs/checkpoints/last_model.pth"
     
-    best_psnr = 0
-    for epoch in range(EPOCHS):
+    if os.path.exists(checkpoint_path):
+        print(f"Found checkpoint at {checkpoint_path}. Resuming training...")
+        trainer.load_checkpoint(checkpoint_path)
+        start_epoch = len(trainer.history['train_loss'])
+        print(f"Resuming from epoch {start_epoch + 1}")
+
+    best_psnr = max(trainer.history['val_psnr']) if trainer.history['val_psnr'] else 0
+    
+    for epoch in range(start_epoch, EPOCHS):
         start_time = time.time()
         train_loss = trainer.train_epoch(train_loader)
         val_psnr = trainer.validate(val_loader)
