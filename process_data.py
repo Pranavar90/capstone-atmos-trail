@@ -48,13 +48,42 @@ def get_image_pairs(root_dir, ds_name):
             gt_dir = os.path.join(root_dir, "thesis", "SOTS", "SOTS", mode, "gt")
             if os.path.exists(hazy_dir):
                 for f in os.listdir(hazy_dir):
-                    # SOTS indoor: GT naming might vary. e.g., 1.png in hazy maps to 1.png in gt?
-                    # Actually SOTS indoor has 500 hazy and 50 gt? RESIDE is complex.
-                    # We'll take what we can.
                     gt_name = f.split('_')[0] + ".png" # common RESIDE mapping
                     gt_path = os.path.join(gt_dir, gt_name)
                     if os.path.exists(gt_path):
                         pairs.append((os.path.join(hazy_dir, f), gt_path))
+
+    elif ds_name == "archive(1)":
+        # Over 14,000 images. Format: hazy/ID_variant_beta.png matches clear/ID.png
+        hazy_dir = os.path.join(root_dir, "thesis", "archive(1)", "hazy")
+        gt_dir = os.path.join(root_dir, "thesis", "archive(1)", "clear")
+        if os.path.exists(hazy_dir) and os.path.exists(gt_dir):
+            for f in os.listdir(hazy_dir):
+                if not f.endswith(('.png', '.jpg')): continue
+                gt_name = f.split('_')[0] + ".png"
+                gt_path = os.path.join(gt_dir, gt_name)
+                # Some clear images might be .jpg
+                if not os.path.exists(gt_path):
+                    gt_path = os.path.join(gt_dir, f.split('_')[0] + ".jpg")
+                if os.path.exists(gt_path):
+                    pairs.append((os.path.join(hazy_dir, f), gt_path))
+
+    elif ds_name == "BeDDE":
+        base_dir = os.path.join(root_dir, "thesis", "BeDDE", "BeDDE")
+        if os.path.exists(base_dir):
+            for city in os.listdir(base_dir):
+                city_dir = os.path.join(base_dir, city)
+                if not os.path.isdir(city_dir): continue
+                hazy_dir = os.path.join(city_dir, "fog")
+                gt_dir = os.path.join(city_dir, "gt")
+                gt_path = os.path.join(gt_dir, f"{city}_clear.png")
+                if not os.path.exists(gt_path):
+                    gt_path = os.path.join(gt_dir, f"{city}_clear.jpg")
+                
+                if os.path.exists(hazy_dir) and os.path.exists(gt_path):
+                    for f in os.listdir(hazy_dir):
+                        if f.endswith(('.png', '.jpg')):
+                            pairs.append((os.path.join(hazy_dir, f), gt_path))
 
     return pairs
 
@@ -66,7 +95,7 @@ def process_dataset(image_size=256):
     
     # 1. Thesis datasets
     thesis_dir = os.path.join(raw_dir, "thesis")
-    for ds in ["NH-HAZE", "I-HAZE", "O-HAZE", "Dense_Haze", "SOTS"]:
+    for ds in ["NH-HAZE", "I-HAZE", "O-HAZE", "Dense_Haze", "SOTS", "archive(1)", "BeDDE"]:
         print(f"Parsing {ds}...")
         pairs = get_image_pairs(raw_dir if ds in ["NH-HAZE", "I-HAZE", "O-HAZE"] else raw_dir, ds)
         # Note: adjust paths as needed
