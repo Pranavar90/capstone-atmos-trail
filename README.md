@@ -1,7 +1,7 @@
 # Capstone: End-to-End Vision Mamba (Vim) Dehazing Architecture
-**Experimental Branch:** `Visionmambatrainingready`
+**Branch:** `workstation` (High-Performance Triton Kernel Version)
 
-This repository branch preserves a state-of-the-art research implementation for Single Image Dehazing. It utilizes a **Vision Mamba (SSM)** backbone to achieve global image context understanding with linear complexity, solving the performance bottlenecks of Transformers and the receptive field limitations of traditional CNNs.
+This repository branch preserves a strictly workstation-optimized implementation for Single Image Dehazing. It utilizes a **Vision Mamba (SSM)** backbone with Triton Hardware Acceleration, Shifted Window Scanning, and Multi-Scale Physics Fusion to achieve global image context understanding with linear complexity.
 
 ---
 
@@ -36,7 +36,7 @@ graph TD
 ```
 
 ### Repository Architecture Deep-Dive
-*   **`models/mamba_arch.py`**: Implementation of the S4-inspired Mamba block. Uses a numerical safety cast to FP32 for the recurrent scan to prevent float16 overflow.
+*   **`models/mamba_arch.py`**: Implementation of the Workstation Mamba block. Replaces pure-PyTorch operations with the official `mamba_ssm` Triton kernels. Implements shifted window scanning and 5-scale physics fusion.
 *   **`training/augmentations.py`**: `HazeDomainRandomization` class. Applies random color temperature shifts and noise to prevent physics memorization.
 *   **`training/losses.py`**: Unified loss function combining L1, SSIM, and a modern **ConvNeXt-Tiny** contrastive regularizer.
 

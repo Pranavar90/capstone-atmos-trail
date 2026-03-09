@@ -11,3 +11,5 @@ numpy
 pillow
 axios
 kaggle
+mamba_ssm
+causal-conv1d>=1.1.0

@@ -293,14 +293,14 @@ const ArchDiagram = () => (
             <div className="arch-arrow"><ArrowRight size={18} /></div>
 
             <div className="arch-node">
-                <span className="arch-node-badge">STAGE 02 — CORE</span>
+                <span className="arch-node-badge">STAGE 02 — TRITON CORE</span>
                 <div className="arch-box engine">
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginBottom: 8 }}>
-                        <span style={{ fontSize: 8, background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)', padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--font-mono)', letterSpacing: '0.1em' }}>FORWARD SCAN</span>
-                        <span style={{ fontSize: 8, background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)', padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--font-mono)', letterSpacing: '0.1em' }}>BACKWARD SCAN</span>
+                        <span style={{ fontSize: 8, background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)', padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--font-mono)', letterSpacing: '0.1em' }}>SHIFTED WINDOWS</span>
+                        <span style={{ fontSize: 8, background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)', padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--font-mono)', letterSpacing: '0.1em' }}>BI-DIRECTIONAL SWEEP</span>
                     </div>
-                    <div className="arch-box-label" style={{ fontSize: 12 }}>Bi-VMamba Blocks</div>
-                    <div className="arch-box-sub">4× S4 + SSM · d_state=16 · O(N)</div>
+                    <div className="arch-box-label" style={{ fontSize: 12 }}>Triton Mamba Array</div>
+                    <div className="arch-box-sub">Hardware Accelerated Kernel · O(N)</div>
                 </div>
             </div>
 
@@ -309,8 +309,8 @@ const ArchDiagram = () => (
             <div className="arch-node">
                 <span className="arch-node-badge">STAGE 03</span>
                 <div className="arch-box embed" style={{ background: 'rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.25)', color: '#c084fc' }}>
-                    <div className="arch-box-label">Spatial Head</div>
-                    <div className="arch-box-sub">Conv Decoder · K-map</div>
+                    <div className="arch-box-label">Multi-Scale Fusion</div>
+                    <div className="arch-box-sub">5 Spatial Scales (1/16 to 1)</div>
                 </div>
             </div>
 
@@ -759,22 +759,22 @@ const BUBBLES = [
         id: 2,
         top: '28%', right: '3%',
         tail: 'left',
-        title: '🧠 Bi-VMamba Engine (The Core)',
-        text: "Unlike Vision Transformers that suffer from O(N²) quadratic scaling, the Mamba SSM architecture runs in linear O(N) time. To overcome the 1D nature of traditional sequence models, this 'Bi-VMamba' block sweeps the 2D image both forward AND backward simultaneously. This guarantees every pixel has the context of the entire image to correctly estimate localized optical depth.",
+        title: '🧠 Triton Mamba Engine (The Core)',
+        text: "Unlike standard Transformers, the Mamba SSM architecture runs in linear O(N) time. The workstation upgrade uses highly-optimized Triton hardware kernels for brutal speed. To prevent global sequences from blurring fine local textures, it utilizes Shifted Window Partitioning (similar to Swin), running bi-directional sweeps inside alternating windows to capture sharp localized optical depth.",
     },
     {
         id: 3,
         top: '51%', left: '3%',
         tail: 'right',
-        title: '⚗️ AOD Physics Reconstruction',
-        text: "AOD (Atmospheric Optical Depth) integration prevents the model from mathematically impossible color generation. J = K·I − K + 1 is derived from the real-world Atmospheric Scattering Model. Instead of blindly hallucinating 'clean' pixels, the neural backbone computes 'K' (the transmission map and atmospheric light joint coefficient), allowing pure physics math to clear the haze.",
+        title: '⚗️ Multi-Scale Physics Fusion',
+        text: "Before passing to the final equation, the Mamba features are unpacked into 5 distinct spatial scales (from 1/16th resolution up to full 1:1). This multi-scale fusion forces the model to synthesize both macro-level global atmospheric density gradients and micro-level transmission edges into a unified K-map, clearing out haze mathematically without hallucinating pixels.",
     },
     {
         id: 4,
         top: '51%', right: '3%',
         tail: 'left',
         title: '📐 Operational Specifications',
-        text: "This defines the physical boundaries of the network. It holds ~12 Million parameters—exceptionally lean for a vision model. 'd=16' represents the internal computing state dimension of the SSM, acting as its selective memory. The batch size of 14 during training was carefully maximized to fully saturate the 4GB VRAM ceiling of the edge-device RTX 3050 GPU limit.",
+        text: "This is the Workstation-Grade deployment. Freed from the constraints of 4GB edge-device VRAM, this architecture leverages the official `mamba_ssm` GPU ops to saturate modern high-end PCI-E bandwidth. The 'd=16' internal computing state dimension acts as its continuous selective memory during the sequence scan.",
     },
     {
         id: 5,
