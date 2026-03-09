@@ -32,23 +32,23 @@ def download_kaggle_dataset(dataset_id, download_path):
         print("Kaggle CLI not found. Please install it with 'pip install kaggle'")
 
 if __name__ == "__main__":
-    # 1. Handle local thesis dataset
-    local_zip = "dehazing-dataset-thesis.zip"
-    thesis_extract_path = "data/raw/thesis"
-    if not os.path.exists(thesis_extract_path) or not os.listdir(thesis_extract_path):
-        extract_zip(local_zip, thesis_extract_path)
-    else:
-        print("Thesis dataset already extracted.")
-
-    # 2. Handle missing datasets from Kaggle
+    # Handle datasets from Kaggle
     kaggle_datasets = {
         "haze1k": "mohit-3430/haze1k-full",
-        "rshaze": "hazel0/rshaze-dataset"
+        "rshaze": "hazel0/rshaze-dataset",
+        "thesis": "hemanth-harikrishnan/dehazing-dataset-thesis"
     }
 
     for name, ds_id in kaggle_datasets.items():
         ds_path = os.path.join("data/raw", name)
+        
+        # Check if dataset already exists and is not empty
         if not os.path.exists(ds_path) or not os.listdir(ds_path):
-            download_kaggle_dataset(ds_id, ds_path)
+            # Special case for local zip if it exists for thesis
+            local_zip = "dehazing-dataset-thesis.zip"
+            if name == "thesis" and os.path.exists(local_zip):
+                extract_zip(local_zip, ds_path)
+            else:
+                download_kaggle_dataset(ds_id, ds_path)
         else:
             print(f"Dataset {name} already exists.")
