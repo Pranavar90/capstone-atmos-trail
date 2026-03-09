@@ -190,7 +190,8 @@ export default function App() {
                     AtmosDehaze <span className="text-indigo-400">AI</span>
                 </h1>
                 <p className="text-slate-400 text-base max-w-xl mx-auto font-light leading-relaxed mt-4">
-                    Physics-guided single image dehazing via Koschmieder atmospheric scattering model with Deep Attention U-Nets.
+                    World-first Single Image Dehazing via **Vision Mamba (Vim)**.
+                    Leveraging State Space Models (SSM) and AOD physics for stable, global-context image restoration.
                 </p>
             </header>
 

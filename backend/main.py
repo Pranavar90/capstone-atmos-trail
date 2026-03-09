@@ -18,8 +18,8 @@ app.add_middleware(
 )
 
 # Configuration
-CHECKPOINT_BEST = "outputs/checkpoints/best_model.pth"
-CHECKPOINT_LAST = "outputs/checkpoints/last_model.pth"
+CHECKPOINT_BEST = "outputs/checkpoints/mamba_best.pth"
+CHECKPOINT_LAST = "outputs/checkpoints/mamba_last.pth"
 TEMP_INPUT = "outputs/inference/temp_input.png"
 TEMP_OUTPUT = "outputs/inference/latest_dehazed.png"
 
@@ -38,7 +38,7 @@ def get_engine():
 
 @app.post("/predict")
 async def predict(image: UploadFile = File(...)):
-    # Accept any image type that PIL can handle (including AVIF, WEBP, TIFF etc.)
+    # Accept any image type that PIL can handle
     if not (image.content_type.startswith("image/") or image.filename.lower().endswith(
         ('.png', '.jpg', '.jpeg', '.webp', '.avif', '.bmp', '.tiff', '.tif')
     )):
@@ -57,8 +57,8 @@ async def predict(image: UploadFile = File(...)):
         raise HTTPException(status_code=404, detail="Model checkpoint not found. Please train the model first.")
     
     try:
-        # Run inference
-        dehazed, t_map, a_light = infra_engine.predict(TEMP_INPUT)
+        # Run inference - updated return signature
+        dehazed, metadata = infra_engine.predict(TEMP_INPUT)
         
         # Save output to a buffer for streaming
         buf = io.BytesIO()

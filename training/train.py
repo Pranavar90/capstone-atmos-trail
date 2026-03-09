@@ -24,7 +24,7 @@ BATCH_SIZE = 14          # Maximizing ~2.5 GB+ VRAM usage as requested
 IMAGE_SIZE = 256
 USE_MIXED_PRECISION = True
 GRAD_ACCUM_STEPS = 2     # Effective batch = 4 * 2 = 8
-NUM_WORKERS = 2
+NUM_WORKERS = 6
 SEED = 42
 WARMUP_EPOCHS = 5
 EMBED_DIM = 64           # SSM embedding dimension
