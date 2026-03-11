@@ -17,7 +17,25 @@ class DehazeInference:
         )
 
         if model_type == "mamba":
-            self.model = MambaDehaze(img_size=256, embed_dim=64, n_layers=4).to(self.device)
+            if os.path.exists(checkpoint_path):
+                # Load checkpoint first to extract the saved training config
+                checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+                cfg = checkpoint.get('config', {})
+                self.model = MambaDehaze(
+                    img_size=cfg.get('image_size', 256),
+                    embed_dim=cfg.get('embed_dim', 64),
+                    d_state=cfg.get('d_state', 16),
+                    n_layers=cfg.get('n_layers', 4),
+                    dropout=cfg.get('dropout', 0.1)
+                ).to(self.device)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                print(f"[Inference] Loaded checkpoint: {checkpoint_path}")
+                print(f"[Inference] Model config: embed_dim={cfg.get('embed_dim')}, "
+                      f"n_layers={cfg.get('n_layers')}, d_state={cfg.get('d_state')}")
+            else:
+                # No checkpoint — fall back to defaults and warn
+                print(f"[Inference] WARNING: No checkpoint found at {checkpoint_path}")
+                self.model = MambaDehaze(img_size=256, embed_dim=64, n_layers=4).to(self.device)
         else:
             # Legacy fallback
             from models.arch import AttentionUNetDehaze
@@ -26,13 +44,13 @@ class DehazeInference:
             self.physics = PhysicsReconstruction().to(self.device)
             self.model = None
 
-        if os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        if os.path.exists(checkpoint_path) and model_type != "mamba":
+            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
             target_model = self.model if self.model else self.legacy_model
             target_model.load_state_dict(checkpoint['model_state_dict'])
             print(f"[Inference] Loaded checkpoint: {checkpoint_path}")
-        else:
-            print(f"[Inference] WARNING: No checkpoint found at {checkpoint_path}")
+        elif not os.path.exists(checkpoint_path):
+            pass  # Warning already printed above
 
         if self.model:
             self.model.eval()
@@ -47,29 +65,33 @@ class DehazeInference:
 
     def predict(self, image_path):
         """
-        Dehaze a single image.
-
-        Args:
-            image_path: path to hazy image
+        Dehaze image and return intermediate maps.
 
         Returns:
-            dehazed_img: PIL Image (original resolution)
-            metadata: dict with model info
+            dehazed_img: PIL Image (final result)
+            physics_img: PIL Image (AOD coarse result)
+            refine_map:  PIL Image (Residual delta visualized)
+            metadata: dict
         """
         image = Image.open(image_path).convert("RGB")
-        original_size = image.size  # (width, height)
+        original_size = image.size
         img_tensor = self.transform(image).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             if self.model_type == "mamba":
-                dehazed = self.model(img_tensor)
+                # Extract all maps from the hybrid model
+                dehazed, physics, refine = self.model(img_tensor, return_maps=True)
             else:
+                # Legacy fallback (simulated maps)
                 t_map, a_light = self.legacy_model(img_tensor)
                 dehazed = self.physics(img_tensor, t_map, a_light)
+                physics = dehazed
+                refine = torch.zeros_like(dehazed)
 
-        # Convert to PIL and resize back to original dimensions
-        dehazed_img = T.ToPILImage()(dehazed.squeeze(0).cpu().clamp(0, 1))
-        dehazed_img = dehazed_img.resize(original_size, Image.LANCZOS)
+        # Helper to convert tensor to PIL
+        def to_pil(tensor):
+            img = T.ToPILImage()(tensor.squeeze(0).cpu().clamp(0, 1))
+            return img.resize(original_size, Image.LANCZOS)
 
         metadata = {
             'model_type': self.model_type,
@@ -77,7 +99,7 @@ class DehazeInference:
             'processing_size': (256, 256)
         }
 
-        return dehazed_img, metadata
+        return to_pil(dehazed), to_pil(physics), to_pil(refine), metadata
 
 
 if __name__ == "__main__":

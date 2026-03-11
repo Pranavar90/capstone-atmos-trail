@@ -18,19 +18,21 @@ from torchvision import transforms
 # ========================
 # Hyperparameters
 # ========================
-EPOCHS = 50
+EPOCHS = 125
 LEARNING_RATE = 2e-4
-BATCH_SIZE = 14          # Maximizing ~2.5 GB+ VRAM usage as requested
+BATCH_SIZE = 128          # Maximizing ~2.5 GB+ VRAM usage as requested
 IMAGE_SIZE = 256
 USE_MIXED_PRECISION = True
 GRAD_ACCUM_STEPS = 2     # Effective batch = 4 * 2 = 8
-NUM_WORKERS = 6
+NUM_WORKERS = 8         # Intel Xeon — use more cores for fast data loading
 SEED = 42
+# Data root: WSL native ext4 filesystem (fast!) rather than /mnt/c/ NTFS bridge
+DATA_ROOT = os.path.expanduser("~/capstone-data/processed")
 WARMUP_EPOCHS = 5
-EMBED_DIM = 64           # SSM embedding dimension
-N_LAYERS = 4             # Number of Vim blocks
-D_STATE = 16             # SSM hidden state size
-GRAD_CLIP_NORM = 0.5     # Extreme clipping for SSM stability
+EMBED_DIM = 128           # SSM embedding dimension
+N_LAYERS = 8             # Number of Vim blocks
+D_STATE = 32             # SSM hidden state size
+GRAD_CLIP_NORM = 1.0     # Extreme clipping for SSM stability
 
 random.seed(SEED)
 torch.manual_seed(SEED)
@@ -68,19 +70,27 @@ class MambaDehazeDataset(Dataset):
         return len(self.images)
 
     def __getitem__(self, idx):
-        hazy_path = os.path.join(self.hazy_dir, self.images[idx])
-        clear_path = os.path.join(self.clear_dir, self.images[idx])
+        for _ in range(5):  # retry up to 5 times on corrupted files
+            try:
+                hazy_path = os.path.join(self.hazy_dir, self.images[idx])
+                clear_path = os.path.join(self.clear_dir, self.images[idx])
 
-        hazy = Image.open(hazy_path).convert("RGB")
-        clear = Image.open(clear_path).convert("RGB")
+                hazy = Image.open(hazy_path).convert("RGB")
+                clear = Image.open(clear_path).convert("RGB")
 
-        if self.augment:
-            hazy_tensor, clear_tensor = self.augmentor(hazy, clear)
-        else:
-            hazy_tensor = self.transform(hazy)
-            clear_tensor = self.transform(clear)
+                if self.augment:
+                    hazy_tensor, clear_tensor = self.augmentor(hazy, clear)
+                else:
+                    hazy_tensor = self.transform(hazy)
+                    clear_tensor = self.transform(clear)
 
-        return hazy_tensor, clear_tensor
+                return hazy_tensor, clear_tensor
+
+            except (OSError, Exception) as e:
+                print(f"\n  [WARN] Skipping corrupted image '{self.images[idx]}': {e}")
+                idx = random.randint(0, len(self.images) - 1)
+
+        raise RuntimeError(f"Could not load a valid image after 5 retries at idx={idx}")
 
 
 def run_training():
@@ -101,15 +111,16 @@ def run_training():
         'w_l1': 1.0,
         'w_ssim': 0.5,
         'w_cr': 0.1,
+        'w_perc': 0.1,
     }
 
     # --- Datasets ---
     train_ds = MambaDehazeDataset(
-        "data/processed", split="train",
+        DATA_ROOT, split="train",
         image_size=IMAGE_SIZE, augment=True
     )
     val_ds = MambaDehazeDataset(
-        "data/processed", split="val",
+        DATA_ROOT, split="val",
         image_size=IMAGE_SIZE, augment=False
     )
 
@@ -192,7 +203,8 @@ def run_training():
 
 
 if __name__ == "__main__":
-    if not os.path.exists("data/processed/train/hazy"):
-        print("ERROR: Data not processed. Run `python process_data.py` first.")
+    if not os.path.exists(os.path.join(DATA_ROOT, "train", "hazy")):
+        print(f"ERROR: Data not found at '{DATA_ROOT}/train/hazy'.")
+        print("Run: rsync -avh --progress /mnt/c/VU22CSEN0101728/capstone-atmos-trail/data/processed/ ~/capstone-data/processed/")
     else:
         run_training()

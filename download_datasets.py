@@ -34,9 +34,9 @@ def download_kaggle_dataset(dataset_id, download_path):
 if __name__ == "__main__":
     # Handle datasets from Kaggle
     kaggle_datasets = {
-        "haze1k": "mohit-3430/haze1k-full",
-        "rshaze": "hazel0/rshaze-dataset",
-        "thesis": "hemanth-harikrishnan/dehazing-dataset-thesis"
+        "haze1k": "mohit3430/haze1k-full",
+        # "rshaze": "lxfbystander/rs-haze-dataset", # Skipping this large dataset per user request
+        "thesis": "hemanthhari/dehazing-dataset-thesis"
     }
 
     for name, ds_id in kaggle_datasets.items():

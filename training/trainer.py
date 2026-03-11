@@ -12,7 +12,7 @@ Features:
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 import os
 import time
 from tqdm import tqdm
@@ -99,7 +99,8 @@ class MambaDehazeTrainer:
         self.criterion = MambaDehazeLoss(
             w_l1=config.get('w_l1', 1.0),
             w_ssim=config.get('w_ssim', 0.5),
-            w_cr=config.get('w_cr', 0.1)
+            w_cr=config.get('w_cr', 0.1),
+            w_perc=config.get('w_perc', 0.1)
         ).to(self.device)
 
         # --- Optimizer ---
@@ -117,14 +118,15 @@ class MambaDehazeTrainer:
         )
 
         # --- Mixed Precision ---
-        self.scaler = GradScaler(enabled=config.get('use_mixed_precision', True))
+        self.scaler = GradScaler('cuda', enabled=config.get('use_mixed_precision', True))
         self.grad_clip_norm = config.get('grad_clip_norm', 0.5)
 
         # --- History ---
         self.history = {
             'train_loss': [], 'val_loss': [],
             'val_psnr': [], 'val_ssim': [],
-            'lr': [], 'vram_mb': []
+            'lr': [], 'vram_mb': [],
+            'perceptual_loss': []
         }
 
     def train_epoch(self, train_loader, epoch):
@@ -137,7 +139,7 @@ class MambaDehazeTrainer:
             hazy = hazy.to(self.device, non_blocking=True)
             clear = clear.to(self.device, non_blocking=True)
 
-            with autocast(enabled=self.config.get('use_mixed_precision', True)):
+            with autocast('cuda', enabled=self.config.get('use_mixed_precision', True)):
                 j_pred = self.model(hazy)
                 loss, losses = self.criterion(j_pred, clear, hazy)
 
@@ -162,20 +164,25 @@ class MambaDehazeTrainer:
 
             pbar.set_postfix({
                 'loss': f"{total_loss / (i+1):.4f}",
+                'perc': f"{loss_components.get('perceptual', 0) / (i+1):.4f}",
                 'lr': f"{self.optimizer.param_groups[0]['lr']:.2e}"
             })
 
         n = len(train_loader)
         avg_loss = total_loss / n
 
+        # Track perceptual loss average
+        self.history['perceptual_loss'].append(
+            loss_components.get('perceptual', 0) / n
+        )
+
         # Log VRAM usage
         if torch.cuda.is_available():
             vram_mb = torch.cuda.max_memory_allocated() / (1024**2)
             vram_gb = vram_mb / 1024
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             self.history['vram_mb'].append(vram_mb)
-            print(f"  [VRAM] Peak: {vram_gb:.3f} GB / 3.50 GB limit")
-            if vram_gb > 3.5:
-                print(f"  [WARNING] VRAM exceeded 3.5 GB! Consider reducing batch_size or embed_dim.")
+            print(f"  [VRAM] Peak: {vram_gb:.3f} GB / {total_vram_gb:.1f} GB")
 
         return avg_loss
 
@@ -191,7 +198,7 @@ class MambaDehazeTrainer:
             hazy = hazy.to(self.device, non_blocking=True)
             clear = clear.to(self.device, non_blocking=True)
 
-            with autocast(enabled=self.config.get('use_mixed_precision', True)):
+            with autocast('cuda', enabled=self.config.get('use_mixed_precision', True)):
                 j_pred = self.model(hazy)
 
             j_pred_f32 = j_pred.float()

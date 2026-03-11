@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 import random
+from concurrent.futures import ProcessPoolExecutor
 
 def get_image_pairs(root_dir, ds_name):
     pairs = []
@@ -87,6 +88,24 @@ def get_image_pairs(root_dir, ds_name):
 
     return pairs
 
+def process_image(args):
+    hazy_path, clear_path, out_idx, hazy_out, clear_out, image_size = args
+    try:
+        h_img = cv2.imread(hazy_path)
+        c_img = cv2.imread(clear_path)
+        
+        if h_img is None or c_img is None: return False
+        
+        h_img = cv2.resize(h_img, (image_size, image_size))
+        c_img = cv2.resize(c_img, (image_size, image_size))
+        
+        cv2.imwrite(os.path.join(hazy_out, f"{out_idx}.png"), h_img)
+        cv2.imwrite(os.path.join(clear_out, f"{out_idx}.png"), c_img)
+        return True
+    except Exception as e:
+        print(f"Error processing {hazy_path}: {e}")
+        return False
+
 def process_dataset(image_size=256):
     raw_dir = "data/raw"
     processed_dir = "data/processed"
@@ -98,13 +117,11 @@ def process_dataset(image_size=256):
     for ds in ["NH-HAZE", "I-HAZE", "O-HAZE", "Dense_Haze", "SOTS", "archive(1)", "BeDDE"]:
         print(f"Parsing {ds}...")
         pairs = get_image_pairs(raw_dir if ds in ["NH-HAZE", "I-HAZE", "O-HAZE"] else raw_dir, ds)
-        # Note: adjust paths as needed
         all_pairs.extend(pairs)
 
     # 2. Haze1k (if downloaded)
     haze1k_dir = os.path.join(raw_dir, "haze1k")
     if os.path.exists(haze1k_dir):
-        # Haze1k structure: train/test_{thin,moderate,thick}/{hazy,clear}
         for root, dirs, files in os.walk(haze1k_dir):
             if "hazy" in root:
                 clear_root = root.replace("hazy", "clear")
@@ -130,20 +147,16 @@ def process_dataset(image_size=256):
         hazy_out = os.path.join(processed_dir, split_name, "hazy")
         clear_out = os.path.join(processed_dir, split_name, "clear")
         
-        for i, (hazy_path, clear_path) in enumerate(tqdm(pairs)):
-            try:
-                h_img = cv2.imread(hazy_path)
-                c_img = cv2.imread(clear_path)
-                
-                if h_img is None or c_img is None: continue
-                
-                h_img = cv2.resize(h_img, (image_size, image_size))
-                c_img = cv2.resize(c_img, (image_size, image_size))
-                
-                cv2.imwrite(os.path.join(hazy_out, f"{i}.png"), h_img)
-                cv2.imwrite(os.path.join(clear_out, f"{i}.png"), c_img)
-            except Exception as e:
-                print(f"Error processing {hazy_path}: {e}")
+        os.makedirs(hazy_out, exist_ok=True)
+        os.makedirs(clear_out, exist_ok=True)
+        
+        # Prepare arguments for multiprocessing
+        tasks = []
+        for i, (hazy_path, clear_path) in enumerate(pairs):
+            tasks.append((hazy_path, clear_path, i, hazy_out, clear_out, image_size))
+            
+        with ProcessPoolExecutor() as executor:
+            list(tqdm(executor.map(process_image, tasks), total=len(tasks)))
 
 if __name__ == "__main__":
     process_dataset()

@@ -80,37 +80,56 @@ class S4Block(nn.Module):
 
     def _ssm_scan(self, u):
         """
-        Sequential scan through the input sequence.
+        Vectorized SSM scan via depthwise causal convolution.
+        Replaces the slow Python for-loop (O(L) Python overhead) with a
+        single GPU-resident F.conv1d call. Mathematically equivalent to
+        the sequential scan because A_bar is time-invariant (diagonal, fixed).
+
+        For each output position t:
+            x_t = sum_{k=0}^{t} A_bar^{t-k} * B_proj[k]   (causal)
+            y_t = C(mean_D(x_t)) + D * u_t
+
+        Since A_bar is constant, this is a depthwise causal convolution
+        with impulse response [1, A, A^2, ..., A^{L-1}] per state channel.
+
         Args:
             u: (B, L, D)  input sequence
         Returns:
             y: (B, L, D)  output sequence
         """
         B_batch, L, D = u.shape
-        A_bar, dt = self._discretise()
+        A_bar, dt = self._discretise()  # (D, N), (D,)
 
         # Project input to state space
-        B_proj = self.B(u)          # (B, L, d_state)
+        B_proj = self.B(u)   # (B, L, N)
         B_proj = B_proj * dt.unsqueeze(0).unsqueeze(0).mean(dim=-1, keepdim=True)
 
-        # CRITICAL FIX for mixed precision (torch.cuda.amp.autocast):
-        # We must forcibly execute the recurring loop in float32. 
-        # Float16 exponentiation inside recurrence explodes instantly to NaN.
-        A_bar = A_bar.to(torch.float32)
-        B_proj = B_proj.to(torch.float32)
-        u_f32 = u.to(torch.float32)
+        # Force FP32 for numerical stability (same as original)
+        A_bar = A_bar.float().clamp(min=1e-8, max=1.0 - 1e-8)  # (D, N)
+        B_proj = B_proj.float()                                   # (B, L, N)
 
-        x = torch.zeros(B_batch, D, self.d_state, device=u.device, dtype=torch.float32)
-        ys = []
+        # --- Build causal convolution kernel ---
+        # A_powers[t, d, n] = A_bar[d, n]^t  for t = 0 .. L-1
+        t_idx = torch.arange(L, device=u.device, dtype=torch.float32)  # (L,)
+        log_A  = torch.log(A_bar)                                        # (D, N)
+        A_powers = torch.exp(t_idx[:, None, None] * log_A[None])         # (L, D, N)
 
-        for i in range(L):
-            # x = A_bar * x + B_bar * u (always executed in FP32)
-            x = A_bar.unsqueeze(0) * x + B_proj[:, i, :].unsqueeze(1).expand_as(x)
-            # y = C * x + D * u
-            y_i = self.C(x.mean(dim=1).to(u.dtype)) + self.D * u[:, i, :]
-            ys.append(y_i)
+        # Average over D to match the original x.mean(dim=1) reduction
+        # A_mean_powers[t, n] = mean_d( A_bar[d, n]^t )
+        A_mean_powers = A_powers.mean(dim=1)                              # (L, N)
 
-        y = torch.stack(ys, dim=1)  # (B, L, D)
+        # Kernel shape (N, 1, L): flipped so position 0 = A^{L-1} (oldest)
+        kernel = A_mean_powers.T.unsqueeze(1).flip(-1)                    # (N, 1, L)
+
+        # --- Depthwise causal conv over sequence ---
+        # Pad L-1 zeros on the left to make the conv causal
+        B_t      = B_proj.transpose(1, 2).contiguous()   # (B, N, L)
+        B_padded = F.pad(B_t, (L - 1, 0))                # (B, N, 2L-1)
+        x_mean   = F.conv1d(B_padded, kernel, groups=self.d_state)  # (B, N, L)
+        x_mean   = x_mean.transpose(1, 2)                # (B, L, N)
+
+        # Output: C maps (B, L, N) -> (B, L, D), plus skip connection
+        y = self.C(x_mean.to(u.dtype)) + self.D * u
         return y
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -228,9 +247,11 @@ class SpatialReconstruction(nn.Module):
     """
     Unflattens the 1D Mamba sequence back to 2D spatial grid and applies
     lightweight depthwise-separable CNN refinement for local edge recovery.
-    Outputs K(x) tensor for end-to-end AOD physics.
+    Outputs 6-channel tensor for:
+      - 3 channels for K(x) (Physics Map)
+      - 3 channels for Delta(x) (Refinement Map)
     """
-    def __init__(self, embed_dim=64, img_size=256, patch_size=8, out_channels=3):
+    def __init__(self, embed_dim=64, img_size=256, patch_size=8, out_channels=6):
         super().__init__()
         self.grid_size = img_size // patch_size   # e.g., 32
         self.embed_dim = embed_dim
@@ -316,36 +337,53 @@ class MambaDehaze(nn.Module):
             embed_dim=embed_dim,
             img_size=img_size,
             patch_size=patch_size,
-            out_channels=3
+            out_channels=6  # 3 for K, 3 for Delta
         )
 
-    def forward(self, hazy_input):
+    def forward(self, hazy_input, return_maps=False):
         """
-        Args:
-            hazy_input: (B, 3, H, W) — the hazy image tensor
+        Physics-Neural Hybrid Forward Pass
+        ================================================
+        1. Process input via Vision Mamba Backbone.
+        2. Predict Physics Head (K) and Refinement Head (ΔJ).
+        3. Compute Physics Coarse: J_aod = K*I - K + 1.
+        4. Fuse: J_final = clamp(J_aod + ΔJ, 0, 1).
 
+        Args:
+            hazy_input: (B, 3, H, W)
+            return_maps: If True, returns (final, physics, refinement)
         Returns:
-            j_pred: (B, 3, H, W) — the dehazed output (End-to-End AOD physics)
+            j_pred: (B, 3, H, W) restored output
         """
-        # --- Mamba Backbone ---
+        # --- 1. Mamba Backbone ---
         x = self.patch_embed(hazy_input)               # (B, L, D)
 
         for block in self.vim_blocks:
             x = block(x)                                # (B, L, D)
 
-        # --- Predict K(x) ---
-        K = self.spatial_head(x)                        # (B, 3, H, W)
+        # --- 2. Dual-Head Prediction ---
+        out = self.spatial_head(x)                      # (B, 6, H, W)
 
-        # Ensure K(x) output matches input spatial size
-        if K.shape[2:] != hazy_input.shape[2:]:
-            K = F.interpolate(K, size=hazy_input.shape[2:], mode='bilinear', align_corners=False)
+        # Ensure spatial size matches input
+        if out.shape[2:] != hazy_input.shape[2:]:
+            out = F.interpolate(out, size=hazy_input.shape[2:],
+                                mode='bilinear', align_corners=False)
 
-        # --- End-to-End AOD Physics ---
-        # J(x) = K(x) * I(x) - K(x) + 1
-        j_pred = K * hazy_input - K + 1.0
+        # Split into K (Physics) and Delta (Refining)
+        # K uses sigmoid to constrain to (0, 1) for AOD stability
+        # Delta uses tanh to constrain to (-1, 1) for additive/subtractive correction
+        K = torch.sigmoid(out[:, :3, :, :])
+        delta = torch.tanh(out[:, 3:, :, :])
 
-        # Clamp output to valid image range
-        j_pred = torch.clamp(j_pred, 0.0, 1.0)
+        # --- 3. Physics Guided Fusion ---
+        # Coarse AOD output
+        j_aod = K * hazy_input - K + 1.0
+
+        # Final refined output
+        j_pred = torch.clamp(j_aod + delta, 0.0, 1.0)
+
+        if return_maps:
+            return j_pred, torch.clamp(j_aod, 0, 1), delta
 
         return j_pred
 

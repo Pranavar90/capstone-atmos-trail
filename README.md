@@ -12,26 +12,37 @@ This repository branch preserves a state-of-the-art research implementation for 
 *   **Transformer Limitation**: Quadratic $O(N^2)$ complexity leads to VRAM explosion on 4GB-8GB GPUs.
 *   **Physics Instability**: Traditional division by transmission $t(x)$ leads to $1/0$ gradient explosions (NaN).
 
-### The Mamba Solution
-Our architecture leverages **State Space Models (SSM)** to scan image patches as a sequence. By using bi-directional scanning, we achieve a global receptive field with $O(N)$ linear complexity.
+### The Modern Hybrid Solution
+Our architecture leverages **State Space Models (SSM)** to scan image patches as a sequence. By using bi-directional scanning, we achieve a global receptive field with $O(N)$ linear complexity. 
+
+We employ a **Physics-Guided Hybrid Architecture**:
+1.  **Vision Mamba Backbone**: Extracts global spatiotemporal features.
+2.  **Physics Branch ($K$)**: Predicts the AOD-Net parameter for atmospheric scattering stability.
+3.  **Refinement Branch ($\Delta J$)**: Predicts a neural residual correction to fix sky blowouts and preserve fine textures.
 
 ```mermaid
 graph TD
     A[Hazy Input I] --> B[Patch Embedding]
     B --> C[Bi-Directional Vision Mamba Blocks]
-    C --> D[Spatial Head]
-    D --> E[Predicted Physics Parameter K]
+    C --> D[Dual-Head Reconstruction]
     
-    subgraph "AOD Physics Reconstruction"
-    E --> F["J = K * I - K + 1"]
+    subgraph "Dual-Branch Output"
+    D --> E[Physics Head: K map]
+    D --> F[Refinement Head: Residual Map]
     end
     
-    F --> G[Dehazed Output J]
+    subgraph "Physics Guided Fusion"
+    E --> G["J_aod = K*I - K + 1"]
+    F --> H["J_final = clamp(J_aod + Residual, 0, 1)"]
+    G --> H
+    end
     
-    subgraph "Dual-Track Training Loss"
-    G --> H[Pixel Loss: L1]
-    G --> I[Structural Loss: SSIM]
-    G --> J[Semantic Loss: ConvNeXt Contrastive]
+    H --> I[Weather Adaptive Output]
+    
+    subgraph "Hybrid Training Objectives"
+    I --> J[Pixel: L1]
+    I --> K[Structure: SSIM]
+    I --> L[Perceptual: ConvNeXt]
     end
 ```
 

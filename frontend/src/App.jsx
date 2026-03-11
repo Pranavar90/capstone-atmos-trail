@@ -91,11 +91,11 @@ const ComparisonSlider = ({ before, after }) => {
 // ─── Neural Processing Overlay ───────────────────────────────────────────────
 const PIPELINE_STAGES = [
     { id: 0, label: 'Extracting Patches', sub: 'Conv2D · Stride 16 · Tokenization', color: '#f97316' },
-    { id: 1, label: 'Forward SSM Scan', sub: 'Bi-VMamba · Linear O(N) Sweep →', color: '#3b82f6' },
-    { id: 2, label: 'Backward SSM Scan', sub: 'Bi-VMamba · Reverse Context ←', color: '#3b82f6' },
-    { id: 3, label: 'K-Map Prediction', sub: 'Spatial Conv Head · Haze Parameter', color: '#8b5cf6' },
-    { id: 4, label: 'AOD Physics Layer', sub: 'J = K·I − K + 1 · Reconstruction', color: '#10b981' },
-    { id: 5, label: 'Upsampling Output', sub: 'Lanczos Interp · Native Resolution', color: '#10b981' },
+    { id: 1, label: 'Vision Mamba Engine', sub: 'Bi-VMamba · Global context scan', color: '#3b82f6' },
+    { id: 2, label: 'Dual-Head Prediction', sub: 'K-map (Physics) + Delta (Refiner)', color: '#8b5cf6' },
+    { id: 3, label: 'Physics Map (AOD)', sub: 'Coarse atmospheric restoration', color: '#f59e0b' },
+    { id: 4, label: 'Refinement Map', sub: 'Neural detail & color correction', color: '#ec4899' },
+    { id: 5, label: 'Hybrid Fusion', sub: 'J = clamp(Physics + Refined, 0, 1)', color: '#10b981' },
 ];
 
 const NeuralProcessingOverlay = ({ preview }) => {
@@ -259,7 +259,7 @@ const NeuralProcessingOverlay = ({ preview }) => {
                     fontSize: 9, fontFamily: 'var(--font-mono)', letterSpacing: '0.22em',
                     textTransform: 'uppercase', color: 'var(--text-dimmer)'
                 }}>
-                    INFERENCE ON GPU · RTX 3050 · CUDA FP16+FP32
+                    INFERENCE ON GPU · NVIDIA RTX A6000 · CUDA FP16+FP32
                 </div>
             </div>
         </div>
@@ -309,18 +309,18 @@ const ArchDiagram = () => (
             <div className="arch-node">
                 <span className="arch-node-badge">STAGE 03</span>
                 <div className="arch-box embed" style={{ background: 'rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.25)', color: '#c084fc' }}>
-                    <div className="arch-box-label">Spatial Head</div>
-                    <div className="arch-box-sub">Conv Decoder · K-map</div>
+                    <div className="arch-box-label">Dual-Head Head</div>
+                    <div className="arch-box-sub">K Branch + Refine Branch</div>
                 </div>
             </div>
 
             <div className="arch-arrow"><ArrowRight size={18} /></div>
 
             <div className="arch-node">
-                <span className="arch-node-badge">PHYSICS LAYER</span>
+                <span className="arch-node-badge">HYBRID FUSION</span>
                 <div className="arch-box physics">
-                    <div className="arch-box-label">AOD Equation</div>
-                    <div className="arch-box-sub">J = K·I − K + 1</div>
+                    <div className="arch-box-label">AOD + Residual</div>
+                    <div className="arch-box-sub">J = (K·I−K+1) + ΔJ</div>
                 </div>
             </div>
 
@@ -329,7 +329,7 @@ const ArchDiagram = () => (
             <div className="arch-node">
                 <span className="arch-node-badge">OUTPUT</span>
                 <div className="arch-box output">
-                    <div className="arch-box-label">Dehazed J</div>
+                    <div className="arch-box-label">Weather Adaptive J</div>
                     <div className="arch-box-sub">RGB · Restored</div>
                 </div>
             </div>
@@ -363,6 +363,9 @@ const SystemTab = ({ status }) => {
     const [preview, setPreview] = useState(null);
     const [imgDims, setImgDims] = useState({ w: 0, h: 0 });
     const [result, setResult] = useState(null);
+    const [physicsMap, setPhysicsMap] = useState(null);
+    const [refineMap, setRefineMap] = useState(null);
+    const [activeView, setActiveView] = useState('final'); // 'final', 'physics', or 'refinement'
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const fileInputRef = useRef(null);
@@ -378,7 +381,8 @@ const SystemTab = ({ status }) => {
     };
 
     const handleReset = () => {
-        setFile(null); setPreview(null); setResult(null); setError(null);
+        setFile(null); setPreview(null); setResult(null); 
+        setPhysicsMap(null); setRefineMap(null); setActiveView('final'); setError(null);
         setImgDims({ w: 0, h: 0 });
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
@@ -389,8 +393,15 @@ const SystemTab = ({ status }) => {
         const form = new FormData();
         form.append('image', file);
         try {
-            const res = await axios.post('/predict', form, { responseType: 'blob' });
-            setResult(URL.createObjectURL(res.data));
+            const res = await axios.post('/predict', form);
+            const data = res.data;
+            if (data.success) {
+                setResult(`data:image/png;base64,${data.final}`);
+                setPhysicsMap(`data:image/png;base64,${data.physics}`);
+                setRefineMap(`data:image/png;base64,${data.refinement}`);
+            } else {
+                throw new Error("API reported failure");
+            }
         } catch (err) {
             setError(err.response?.data?.detail || err.message || 'Inference failed');
         } finally {
@@ -500,7 +511,7 @@ const SystemTab = ({ status }) => {
                             <span className="telem-label">Compute</span>
                             <span className="telem-badge amber">
                                 <Cpu size={10} />
-                                {status.device || 'RTX 3050'}
+                                NVIDIA RTX A6000
                             </span>
                         </div>
                         <div className="telem-row">
@@ -580,7 +591,83 @@ const SystemTab = ({ status }) => {
                 )}
 
                 {result && (
-                    <ComparisonSlider before={preview} after={result} />
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                        <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                            <ComparisonSlider 
+                                key={activeView}
+                                before={preview} 
+                                after={
+                                    activeView === 'physics' ? physicsMap :
+                                    activeView === 'refinement' ? refineMap : 
+                                    result
+                                } 
+                            />
+                        </div>
+                        
+                        {/* Process Breakdown Section */}
+                        <div style={{ 
+                            padding: '16px 24px', 
+                            background: 'rgba(7,7,7,0.8)', 
+                            borderTop: '1px solid var(--border)',
+                            backdropFilter: 'blur(10px)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 12
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <FlaskConical size={14} style={{ color: '#3b82f6' }} />
+                                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>
+                                    Vision Mamba Hybrid Process Breakdown · Click to View
+                                </span>
+                            </div>
+                            
+                            <div style={{ display: 'flex', gap: 10 }}>
+                                {[
+                                    { id: 'input', src: preview, label: '01. Input (I)', sub: 'Hazy Source' },
+                                    { id: 'physics', src: physicsMap, label: '02. Physics (J_aod)', sub: 'Coarse AOD Map' },
+                                    { id: 'refinement', src: refineMap, label: '03. Refiner (ΔJ)', sub: 'Neural Correction' },
+                                    { id: 'final', src: result, label: '04. Fusion (J)', sub: 'Final Adaptive', highlight: true },
+                                ].map((step) => {
+                                    const isActive = activeView === step.id || (step.id === 'input' && activeView === 'input');
+                                    // Special case: clicking input doesn't change slider 'after', but we'll allow it for UI consistency
+                                    return (
+                                        <div 
+                                            key={step.id} 
+                                            onClick={() => {
+                                                if (step.id !== 'input') {
+                                                    console.log(`Switching view to: ${step.id}`);
+                                                    setActiveView(step.id);
+                                                }
+                                            }}
+                                            style={{ 
+                                                flex: 1, 
+                                                background: isActive ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg-raised)', 
+                                                border: `1px solid ${isActive ? (step.highlight ? '#10b981' : '#3b82f6') : 'var(--border)'}`,
+                                                borderRadius: 6,
+                                                overflow: 'hidden',
+                                                cursor: step.id === 'input' ? 'default' : 'pointer',
+                                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                opacity: (step.id === 'input' || !step.src) ? 0.5 : 1,
+                                                transform: isActive ? 'scale(1.02)' : 'none',
+                                                boxShadow: isActive ? `0 4px 20px ${step.highlight ? '#10b98140' : '#3b82f640'}` : 'none',
+                                                zIndex: isActive ? 10 : 1
+                                            }}
+                                        >
+                                            <div style={{ height: 75, background: '#000', position: 'relative' }}>
+                                                <img src={step.src} alt={step.label} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                            </div>
+                                            <div style={{ padding: '6px 10px' }}>
+                                                <div style={{ fontSize: 9, fontWeight: 700, color: step.highlight ? '#10b981' : (isActive ? '#3b82f6' : 'var(--text-mid)'), whiteSpace: 'nowrap' }}>{step.label}</div>
+                                                <div style={{ fontSize: 8, color: 'var(--text-dimmer)', marginTop: 1 }}>{step.sub}</div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
                 )}
             </div>
         </div>
@@ -766,15 +853,15 @@ const BUBBLES = [
         id: 3,
         top: '51%', left: '3%',
         tail: 'right',
-        title: '⚗️ AOD Physics Reconstruction',
-        text: "AOD (Atmospheric Optical Depth) integration prevents the model from mathematically impossible color generation. J = K·I − K + 1 is derived from the real-world Atmospheric Scattering Model. Instead of blindly hallucinating 'clean' pixels, the neural backbone computes 'K' (the transmission map and atmospheric light joint coefficient), allowing pure physics math to clear the haze.",
+        title: '⚗️ Physics-Neural Hybrid Logic',
+        text: "This model combines AOD-Net physics with a Neural Refinement branch. The physics branch provides a coarse restoration based on scattering laws, while the refinement branch predicts a local residual to fix artifacts like sky blowout, color shifts, and fine texture loss. J_final = J_aod + ΔJ.",
     },
     {
         id: 4,
         top: '51%', right: '3%',
         tail: 'left',
         title: '📐 Operational Specifications',
-        text: "This defines the physical boundaries of the network. It holds ~12 Million parameters—exceptionally lean for a vision model. 'd=16' represents the internal computing state dimension of the SSM, acting as its selective memory. The batch size of 14 during training was carefully maximized to fully saturate the 4GB VRAM ceiling of the edge-device RTX 3050 GPU limit.",
+        text: "The model uses an NVIDIA RTX A6000 for heavy data-parallel training and inference. The State Space Model (SSM) architecture allows us to maintain a global receptive field over 256x256 resolution while keeping the memory footprint minimal, enabling real-time weather-adaptive processing.",
     },
     {
         id: 5,

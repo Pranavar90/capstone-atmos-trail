@@ -18,6 +18,39 @@ import math
 
 
 # =============================================================================
+# ConvNeXt Perceptual Loss (modern 2022 architecture — replaces legacy VGG)
+# =============================================================================
+
+class ConvNeXtPerceptualLoss(nn.Module):
+    """
+    Perceptual loss using frozen ConvNeXt-Tiny feature stages.
+    Uses the same backbone as ContrastiveRegularizationLoss to share compute.
+    Computes multi-scale L1 feature distance (stage0, stage1, stage2).
+
+    Why ConvNeXt over VGG:
+      - ConvNeXt (2022) captures richer semantic + structural features
+      - Already loaded in the pipeline (no extra VRAM for a second network)
+      - ImageNet-21K pretraining gives far better perceptual alignment
+    """
+    def __init__(self, extractor: 'ConvNeXtFeatureExtractor' = None):
+        super().__init__()
+        # Accept a shared extractor to avoid loading ConvNeXt twice
+        self._shared = extractor  # will be set after ContrastiveRegularizationLoss is created
+
+    def set_extractor(self, extractor):
+        self._shared = extractor
+
+    def forward(self, pred, target):
+        assert self._shared is not None, "Call set_extractor() before using ConvNeXtPerceptualLoss"
+        with torch.no_grad():
+            feats_target = self._shared(target)
+        feats_pred = self._shared(pred)
+        loss = sum(F.l1_loss(fp, ft.detach())
+                   for fp, ft in zip(feats_pred, feats_target))
+        return loss / len(feats_pred)
+
+
+# =============================================================================
 # SSIM Loss
 # =============================================================================
 
@@ -172,17 +205,22 @@ class MambaDehazeLoss(nn.Module):
     """
     Combined loss for the End-to-End Vision Mamba Dehazer.
 
-    Total = w_l1 * L1 + w_ssim * SSIM + w_cr * ContrastiveReg
+    Total = w_l1 * L1 + w_ssim * SSIM + w_cr * ContrastiveReg + w_perc * ConvNeXtPerceptual
     """
-    def __init__(self, w_l1=1.0, w_ssim=0.5, w_cr=0.1):
+    def __init__(self, w_l1=1.0, w_ssim=0.5, w_cr=0.1, w_perc=0.1):
         super().__init__()
-        self.w_l1 = w_l1
+        self.w_l1   = w_l1
         self.w_ssim = w_ssim
-        self.w_cr = w_cr
+        self.w_cr   = w_cr
+        self.w_perc = w_perc
 
-        self.l1_loss = nn.L1Loss()
+        self.l1_loss   = nn.L1Loss()
         self.ssim_loss = SSIMLoss()
-        self.cr_loss = ContrastiveRegularizationLoss()
+        self.cr_loss   = ContrastiveRegularizationLoss()
+
+        # Share ConvNeXt extractor to avoid loading the backbone twice
+        self.perc_loss = ConvNeXtPerceptualLoss()
+        self.perc_loss.set_extractor(self.cr_loss.feature_extractor)
 
     def forward(self, j_pred, j_target, i_hazy):
         """
@@ -194,21 +232,26 @@ class MambaDehazeLoss(nn.Module):
             total_loss, dict of individual losses
         """
         # Safety clamp to prevent NaN in SSIM/ConvNeXt during mixed precision
-        j_pred = torch.clamp(j_pred, 0.0, 1.0)
+        j_pred   = torch.clamp(j_pred,   0.0, 1.0)
         j_target = torch.clamp(j_target, 0.0, 1.0)
-        i_hazy = torch.clamp(i_hazy, 0.0, 1.0)
+        i_hazy   = torch.clamp(i_hazy,   0.0, 1.0)
 
-        loss_l1 = self.l1_loss(j_pred, j_target)
+        loss_l1   = self.l1_loss(j_pred, j_target)
         loss_ssim = self.ssim_loss(j_pred, j_target)
-        loss_cr = self.cr_loss(j_pred, j_target, i_hazy)
+        loss_cr   = self.cr_loss(j_pred, j_target, i_hazy)
+        loss_perc = self.perc_loss(j_pred, j_target)
 
-        total = self.w_l1 * loss_l1 + self.w_ssim * loss_ssim + self.w_cr * loss_cr
+        total = (self.w_l1   * loss_l1
+               + self.w_ssim * loss_ssim
+               + self.w_cr   * loss_cr
+               + self.w_perc * loss_perc)
 
         losses = {
-            'l1': loss_l1.item(),
-            'ssim': loss_ssim.item(),
+            'l1':          loss_l1.item(),
+            'ssim':        loss_ssim.item(),
             'contrastive': loss_cr.item(),
-            'total': total.item()
+            'perceptual':  loss_perc.item(),
+            'total':       total.item()
         }
 
         return total, losses

@@ -57,19 +57,26 @@ async def predict(image: UploadFile = File(...)):
         raise HTTPException(status_code=404, detail="Model checkpoint not found. Please train the model first.")
     
     try:
-        # Run inference - updated return signature
-        dehazed, metadata = infra_engine.predict(TEMP_INPUT)
+        # Run inference - returns (Final, Physics, Refine, Metadata)
+        dehazed, physics, refine, metadata = infra_engine.predict(TEMP_INPUT)
         
-        # Save output to a buffer for streaming
-        buf = io.BytesIO()
-        dehazed.save(buf, format='PNG')
-        buf.seek(0)
-        
-        # Also save to disk for persistence if needed
-        dehazed.save(TEMP_OUTPUT)
-        
-        return StreamingResponse(buf, media_type="image/png")
+        # Helper to convert PIL to Base64
+        import base64
+        def to_b64(img):
+            b = io.BytesIO()
+            img.save(b, format='PNG')
+            return base64.b64encode(b.getvalue()).decode('utf-8')
+
+        return JSONResponse({
+            "success": True,
+            "final": to_b64(dehazed),
+            "physics": to_b64(physics),
+            "refinement": to_b64(refine),
+            "metadata": metadata
+        })
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
 
 @app.get("/status")
@@ -78,7 +85,7 @@ async def status():
     return JSONResponse({
         "model_loaded": get_engine() is not None,
         "checkpoint": os.path.basename(checkpoint) if os.path.exists(checkpoint) else "None",
-        "device": "NVIDIA RTX 3050" if get_engine() else "N/A"
+        "device": "NVIDIA RTX A6000" if get_engine() else "N/A"
     })
 
 if __name__ == "__main__":
