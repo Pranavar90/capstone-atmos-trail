@@ -32,7 +32,7 @@ WARMUP_EPOCHS = 0         # Disabled warmup to prevent LR spikes
 EMBED_DIM = 128           # Restoration capacity
 N_LAYERS = 6              # Restoration depth
 D_STATE = 16              # 16 states per channel
-GRAD_CLIP_NORM = 0.5     # Aggressive clipping to prevent NaNs
+GRAD_CLIP_NORM = 0.1     # Extreme clipping to prevent any SSM spikes in V8
 
 random.seed(SEED)
 torch.manual_seed(SEED)

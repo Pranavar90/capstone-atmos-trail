@@ -259,10 +259,9 @@ class GlobalAtmosphereHead(nn.Module):
             # Identity: weights = 0, bias = high (for Sigmoid -> 1.0)
             # Find the linear layers in the sequential block
             for layer in self.mlp:
-                if hasattr(layer, 'weight'):
+                if isinstance(layer, nn.Linear):
                     nn.init.constant_(layer.weight, 0)
-                if hasattr(layer, 'bias'):
-                    nn.init.constant_(layer.bias, 4.0)
+                    nn.init.constant_(layer.bias, 4.0 if layer.out_features == 3 else 0)
 
     def forward(self, x):
         """
@@ -469,14 +468,16 @@ class MambaDehaze(nn.Module):
         c_atm_f32 = c_atm.float()
 
         # K_mask (geometry of haze)
-        # Expansion: Scale by 10.0 to allow K > 1.0 (required for dehazing)
-        k_mask = torch.sigmoid(out_f32[:, 0:1, :, :]) * 10.0  # (B, 1, H, W)
+        # Physics V8: Enforce K >= 1.0 using Softplus.
+        # This mathematically prevents the model from brightening (adding haze).
+        # It can ONLY darken the hazy image towards the clear one.
+        k_mask = 1.0 + F.softplus(out_f32[:, 0:1, :, :])  # (B, 1, H, W)
         
         # Adaptive K(x): Image-wide color consistency + Spatial geometry
         K = k_mask * c_atm_f32                              # (B, 3, H, W)
 
-        # Refinement residuals (scaled for stability)
-        delta = torch.tanh(out_f32[:, 1:4, :, :]) * 0.1     # (B, 3, H, W)
+        # Refinement residuals (Disabled in V8 to stabilize core physics)
+        delta = torch.zeros_like(out_f32[:, 1:4, :, :])    # (B, 3, H, W)
 
         # --- 4. Physics Reconstruction ---
         j_aod = K * hazy_f32 - K + 1.0                # (B, 3, H, W)
