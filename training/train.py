@@ -19,7 +19,7 @@ from torchvision import transforms
 # Hyperparameters
 # ========================
 EPOCHS = 50
-LEARNING_RATE = 2e-5      # Restoration LR for Physics V6
+LEARNING_RATE = 1e-5      # Flat schedule for Physics V7 (Zero-Divergence)
 BATCH_SIZE = 48           # Optimized for regularization & 48GB VRAM
 IMAGE_SIZE = 256
 USE_MIXED_PRECISION = True
@@ -28,7 +28,7 @@ NUM_WORKERS = 8           # Increasing workers for high throughput
 SEED = 42
 # Data root: WSL native ext4 filesystem (fast!) 
 DATA_ROOT = os.path.expanduser("~/capstone-data/processed")
-WARMUP_EPOCHS = 5         # Fast wakeup for V6 Full Math
+WARMUP_EPOCHS = 0         # Disabled warmup to prevent LR spikes
 EMBED_DIM = 128           # Restoration capacity
 N_LAYERS = 6              # Restoration depth
 D_STATE = 16              # 16 states per channel

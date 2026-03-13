@@ -80,8 +80,10 @@ class SSIMLoss(nn.Module):
         self.C2 = 0.03 ** 2
 
     def forward(self, pred, target):
-        # Ensure kernel is on the right device
-        kernel = self.kernel.to(pred.device, dtype=pred.dtype)
+        # Force FP32 for SSIM to prevent underflow/NaN in mixed precision
+        pred = pred.float()
+        target = target.float()
+        kernel = self.kernel.to(pred.device, dtype=torch.float32)
         pad = self.window_size // 2
 
         mu_pred = F.conv2d(pred, kernel, padding=pad, groups=self.channels)
@@ -95,8 +97,11 @@ class SSIMLoss(nn.Module):
         sigma_target_sq = F.conv2d(target * target, kernel, padding=pad, groups=self.channels) - mu_target_sq
         sigma_pred_target = F.conv2d(pred * target, kernel, padding=pad, groups=self.channels) - mu_pred_target
 
-        ssim_map = ((2 * mu_pred_target + self.C1) * (2 * sigma_pred_target + self.C2)) / \
-                   ((mu_pred_sq + mu_target_sq + self.C1) * (sigma_pred_sq + sigma_target_sq + self.C2))
+        # Precision epsilon: add 1e-8 to denominators to prevent division by zero/inf
+        num = (2 * mu_pred_target + self.C1) * (2 * sigma_pred_target + self.C2)
+        den = (mu_pred_sq + mu_target_sq + self.C1) * (sigma_pred_sq + sigma_target_sq + self.C2)
+        
+        ssim_map = num / (den + 1e-8)
 
         return 1.0 - ssim_map.mean()
 

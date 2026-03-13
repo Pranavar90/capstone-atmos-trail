@@ -56,18 +56,20 @@ class S4Block(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
 
-        self._init_weights()
+        self._init_ssm_params()
 
-    def _init_weights(self):
-        """HiPPO-inspired initialisation for the state matrix."""
+    def _init_ssm_params(self):
+        """Stability-focused initialization for SSM parameters."""
         with torch.no_grad():
-            # Initialise A as negative values (stable dynamics)
-            # A_log represents the log of the ABSOLUTE VALUE of A
+            # A Hippo: Initialise A as negative values (stable dynamics)
             n = self.d_state
             A_mag = torch.arange(1, n + 1, dtype=torch.float32)
             self.A_log.copy_(
                 A_mag.unsqueeze(0).expand(self.d_model, -1).log().clamp(min=-7)
             )
+            # B and C: Small initial energy to prevent resume spikes
+            nn.init.normal_(self.B_param, std=0.001)
+            nn.init.normal_(self.C_param, std=0.001)
 
     def _discretise(self):
         """Zero-Order Hold (ZOH) discretisation."""
@@ -108,9 +110,9 @@ class S4Block(nn.Module):
         # Shape: (D, N)
         cb_dt = C_weight * B_weight * dt.unsqueeze(-1)
         
-        # Multiply across state dimension N and sum
         # Kernel shape: (L, D)
-        kernel_t_d = (A_powers * cb_dt[None, :, :]).sum(dim=-1)
+        # Expansion: Scale kernel by 0.1 to prevent memory explosion at start
+        kernel_t_d = (A_powers * cb_dt[None, :, :]).sum(dim=-1) * 0.1
         
         # Reshape to (D, 1, L) for depthwise conv
         kernel = kernel_t_d.T.unsqueeze(1).flip(-1) 

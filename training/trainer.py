@@ -132,7 +132,7 @@ class MambaDehazeTrainer:
     def train_epoch(self, train_loader, epoch):
         self.model.train()
         total_loss = 0.0
-        loss_components = {'l1': 0, 'ssim': 0, 'contrastive': 0}
+        loss_components = {'l1': 0, 'ssim': 0, 'contrastive': 0, 'perceptual': 0}
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]")
 
         for i, (hazy, clear) in enumerate(pbar):
@@ -218,6 +218,7 @@ class MambaDehazeTrainer:
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'scaler_state_dict': self.scaler.state_dict(),
             'config': self.config,
             'history': self.history,
             'best_psnr': best_psnr
@@ -227,8 +228,12 @@ class MambaDehazeTrainer:
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scaler_state_dict' in checkpoint:
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        epoch = checkpoint.get('epoch', 0)
         self.history = checkpoint.get('history', self.history)
-        return checkpoint.get('epoch', 0), checkpoint.get('best_psnr', 0)
+        best_psnr = checkpoint.get('best_psnr', 0)
+        return epoch, best_psnr
 
     def plot_history(self):
         os.makedirs('outputs/plots', exist_ok=True)
