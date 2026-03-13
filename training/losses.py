@@ -189,10 +189,10 @@ class ContrastiveRegularizationLoss(nn.Module):
         for fp, ft, fh in zip(feats_pred, feats_target, feats_hazy):
             # Pull dehazed towards clear
             d_positive = self._cosine_distance(fp, ft.detach())
-            # Push dehazed away from hazy
-            d_negative = self._cosine_distance(fp, fh.detach())
-            # Contrastive: minimise positive, maximise negative
-            loss += d_positive + F.relu(self.margin - d_negative)
+            # Push-Away (Negative) disabled in V5 for initial stability
+            # d_negative = self._cosine_distance(fp, fh.detach())
+            # loss += d_positive + F.relu(self.margin - d_negative)
+            loss += d_positive 
 
         return loss / len(feats_pred)
 

@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import numpy as np
 
 
 # =============================================================================
@@ -39,11 +40,10 @@ class S4Block(nn.Module):
         self.d_model = d_model
         self.d_state = d_state
 
-        # Learnable SSM parameters (diagonal state matrix for efficiency)
-        # Log-space parameterisation for numerical stability
+        # Learnable SSM parameters (diagonal state matrix per channel)
         self.A_log = nn.Parameter(torch.randn(d_model, d_state))
-        self.B = nn.Linear(d_model, d_state, bias=False)
-        self.C = nn.Linear(d_state, d_model, bias=False)
+        self.B_param = nn.Parameter(torch.randn(d_model, d_state) * 0.02)
+        self.C_param = nn.Parameter(torch.randn(d_model, d_state) * 0.02)
         self.D = nn.Parameter(torch.ones(d_model))  # skip connection
 
         # Learnable discretisation step
@@ -80,18 +80,9 @@ class S4Block(nn.Module):
 
     def _ssm_scan(self, u):
         """
-        Vectorized SSM scan via depthwise causal convolution.
-        Replaces the slow Python for-loop (O(L) Python overhead) with a
-        single GPU-resident F.conv1d call. Mathematically equivalent to
-        the sequential scan because A_bar is time-invariant (diagonal, fixed).
-
-        For each output position t:
-            x_t = sum_{k=0}^{t} A_bar^{t-k} * B_proj[k]   (causal)
-            y_t = C(mean_D(x_t)) + D * u_t
-
-        Since A_bar is constant, this is a depthwise causal convolution
-        with impulse response [1, A, A^2, ..., A^{L-1}] per state channel.
-
+        Full-Rank Per-Channel SSM Scan (V6).
+        Calculates the kernel h(t) = sum_n C_n * B_n * A_n^t
+        
         Args:
             u: (B, L, D)  input sequence
         Returns:
@@ -100,36 +91,37 @@ class S4Block(nn.Module):
         B_batch, L, D = u.shape
         A_bar, dt = self._discretise()  # (D, N), (D,)
 
-        # Project input to state space
-        B_proj = self.B(u)   # (B, L, N)
-        B_proj = B_proj * dt.unsqueeze(0).unsqueeze(0).mean(dim=-1, keepdim=True)
-
-        # Force FP32 for numerical stability (same as original)
+        # Stability: Ensure A_bar is strictly decaying
         A_bar = A_bar.float().clamp(min=1e-8, max=1.0 - 1e-8)  # (D, N)
-        B_proj = B_proj.float()                                   # (B, L, N)
-
-        # --- Build causal convolution kernel ---
-        # A_powers[t, d, n] = A_bar[d, n]^t  for t = 0 .. L-1
+        B_weight = self.B_param.float()                         # (D, N)
+        C_weight = self.C_param.float()                         # (D, N)
+        
+        # --- Build causal convolution kernel (Full Math) ---
+        # h[d, t] = sum_n (C[d,n] * B[d,n] * A_bar[d,n]^t) * dt[d]
         t_idx = torch.arange(L, device=u.device, dtype=torch.float32)  # (L,)
-        log_A  = torch.log(A_bar)                                        # (D, N)
-        A_powers = torch.exp(t_idx[:, None, None] * log_A[None])         # (L, D, N)
+        log_A = torch.log(A_bar) # (D, N)
+        
+        # A_powers shape: (L, D, N)
+        A_powers = torch.exp(t_idx[:, None, None] * log_A[None, :, :]) 
 
-        # Average over D to match the original x.mean(dim=1) reduction
-        # A_mean_powers[t, n] = mean_d( A_bar[d, n]^t )
-        A_mean_powers = A_powers.mean(dim=1)                              # (L, N)
+        # Combined weight: C * B * dt
+        # Shape: (D, N)
+        cb_dt = C_weight * B_weight * dt.unsqueeze(-1)
+        
+        # Multiply across state dimension N and sum
+        # Kernel shape: (L, D)
+        kernel_t_d = (A_powers * cb_dt[None, :, :]).sum(dim=-1)
+        
+        # Reshape to (D, 1, L) for depthwise conv
+        kernel = kernel_t_d.T.unsqueeze(1).flip(-1) 
 
-        # Kernel shape (N, 1, L): flipped so position 0 = A^{L-1} (oldest)
-        kernel = A_mean_powers.T.unsqueeze(1).flip(-1)                    # (N, 1, L)
+        # --- Depthwise causal conv over channels ---
+        u_t = u.transpose(1, 2).contiguous().float()   # (B, D, L)
+        u_padded = F.pad(u_t, (L - 1, 0))              # (B, D, 2L-1)
+        
+        y = F.conv1d(u_padded, kernel, groups=D)  # (B, D, L)
+        y = y.transpose(1, 2).to(u.dtype)          # (B, L, D)
 
-        # --- Depthwise causal conv over sequence ---
-        # Pad L-1 zeros on the left to make the conv causal
-        B_t      = B_proj.transpose(1, 2).contiguous()   # (B, N, L)
-        B_padded = F.pad(B_t, (L - 1, 0))                # (B, N, 2L-1)
-        x_mean   = F.conv1d(B_padded, kernel, groups=self.d_state)  # (B, N, L)
-        x_mean   = x_mean.transpose(1, 2)                # (B, L, N)
-
-        # Output: C maps (B, L, N) -> (B, L, D), plus skip connection
-        y = self.C(x_mean.to(u.dtype)) + self.D * u
         return y
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -157,7 +149,8 @@ class S4Block(nn.Module):
         y = self.out_proj(y)
         y = self.dropout(y)
 
-        return y + residual
+        # Stability: Final residual connection clamping
+        return torch.clamp(y + residual, -10, 10)
 
 
 # =============================================================================
@@ -240,18 +233,54 @@ class PatchEmbedding(nn.Module):
 
 
 # =============================================================================
-# Spatial Reconstruction + CNN Refinement
+# Adaptive Physics Heads: Global Atmosphere + Spatial Mask
 # =============================================================================
+
+class GlobalAtmosphereHead(nn.Module):
+    """
+    Light neural network to "understand" the image atmosphere and assign channels.
+    Predicts a 3-channel global color vector (Atmospheric Light hint).
+    """
+    def __init__(self, embed_dim=64):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.GELU(),
+            nn.Linear(embed_dim // 2, 3),
+            nn.Sigmoid() # Constrain color assignment to (0, 1)
+        )
+        self._init_bias()
+
+    def _init_bias(self):
+        """Strict Identity Init: Forces C_atm to start at exactly ~1.0."""
+        with torch.no_grad():
+            # Identity: weights = 0, bias = high (for Sigmoid -> 1.0)
+            # Find the linear layers in the sequential block
+            for layer in self.mlp:
+                if hasattr(layer, 'weight'):
+                    nn.init.constant_(layer.weight, 0)
+                if hasattr(layer, 'bias'):
+                    nn.init.constant_(layer.bias, 4.0)
+
+    def forward(self, x):
+        """
+        x: (B, L, D)
+        returns: (B, 3, 1, 1)
+        """
+        # Global Average Pooling over tokens
+        x_gap = x.mean(dim=1) # (B, D)
+        c_atm = self.mlp(x_gap) # (B, 3)
+        return c_atm.unsqueeze(-1).unsqueeze(-1)
+
 
 class SpatialReconstruction(nn.Module):
     """
-    Unflattens the 1D Mamba sequence back to 2D spatial grid and applies
-    lightweight depthwise-separable CNN refinement for local edge recovery.
-    Outputs 6-channel tensor for:
-      - 3 channels for K(x) (Physics Map)
-      - 3 channels for Delta(x) (Refinement Map)
+    Unflattens the 1D Mamba sequence back to 2D spatial grid.
+    Outputs 4-channel tensor for:
+      - 1 channel for K_mask(x) (Physics geometry)
+      - 3 channels for Delta(x) (Neural refinement)
     """
-    def __init__(self, embed_dim=64, img_size=256, patch_size=8, out_channels=6):
+    def __init__(self, embed_dim=64, img_size=256, patch_size=8, out_channels=4):
         super().__init__()
         self.grid_size = img_size // patch_size   # e.g., 32
         self.embed_dim = embed_dim
@@ -259,27 +288,82 @@ class SpatialReconstruction(nn.Module):
         # Project embedding back to spatial channels
         self.proj = nn.Linear(embed_dim, embed_dim)
 
-        # Lightweight CNN refinement (depthwise separable for VRAM efficiency)
-        self.refine = nn.Sequential(
-            # Upsample from grid_size to img_size
-            nn.ConvTranspose2d(embed_dim, embed_dim // 2, kernel_size=4, stride=4, padding=0),
-            nn.BatchNorm2d(embed_dim // 2),
-            nn.GELU(),
-            nn.ConvTranspose2d(embed_dim // 2, embed_dim // 4, kernel_size=2, stride=2, padding=0),
-            nn.BatchNorm2d(embed_dim // 4),
-            nn.GELU(),
-            # Depthwise separable conv for local edge refinement
-            nn.Conv2d(embed_dim // 4, embed_dim // 4, kernel_size=3, padding=1,
-                      groups=embed_dim // 4, bias=False),
-            nn.Conv2d(embed_dim // 4, out_channels, kernel_size=1, bias=True),
+        # Multi-Path Reconstruction (Double-Barreled Upsampling)
+        # Branch A: Sharp (Sub-Pixel Shuffle)
+        # Using 256 channels as 4 * (8^2) = 256 for 4-channel effective output
+        self.path_sharp = nn.Sequential(
+            nn.Conv2d(embed_dim, 256, kernel_size=3, padding=1),
+            nn.PixelShuffle(upscale_factor=8),
+            nn.GELU()
         )
+        
+        # Branch B: Smooth (Bicubic Baseline)
+        self.path_smooth = nn.Sequential(
+            nn.Upsample(scale_factor=8, mode='bicubic', align_corners=False),
+            nn.Conv2d(embed_dim, 4, kernel_size=3, padding=1),
+            nn.GELU()
+        )
+        
+        # Final Fusion: Merge Smooth + Sharp paths
+        # out_channels = 4 (1 for K_mask, 3 for ΔJ_residual)
+        self.fusion = nn.Conv2d(8, out_channels, kernel_size=3, padding=1)
+
+        self._init_upsampler()
+        self._init_refinement_to_zero()
+
+    def _init_refinement_to_zero(self):
+        """
+        1. Zero-init weights so sharp/smooth paths don't jitter on Epoch 0.
+        2. Set K_mask bias so Sigmoid(bias)*10 starts near 1.0 (identity).
+        3. Set Delta bias to 0.
+        """
+        with torch.no_grad():
+            # Zero ALL weights in fusion to ignore random sharp/smooth noise at start
+            self.fusion.weight.fill_(0)
+            
+            # Delta branch (channels 1, 2, 3) -> Bias = 0
+            if self.fusion.bias is not None:
+                self.fusion.bias[1:].fill_(0)
+            
+            # K_mask branch (channel 0) -> Sigmoid(x)*10 ~= 1.0
+            # logit(0.1) = ln(0.1/0.9) ~= -2.2
+            if self.fusion.bias is not None:
+                self.fusion.bias[0].fill_(-2.2)
+
+    def _init_upsampler(self):
+        """
+        ICNR initialization for the PixelShuffle layer's convolution.
+        Prevents checkerboard artifacts by ensuring the sub-pixels are 
+        initialized to a smooth upscale.
+        """
+        conv = self.path_sharp[0]
+        upscale_factor = 8
+        out_channels = 4  # Target channels after shuffle (Mask + 3-ch Delta)
+        
+        with torch.no_grad():
+            # Initial weight: (out_channels * r^2, in_channels, k, k)
+            weight = conv.weight
+            ni, ci, h, w = weight.shape
+            
+            # Sub-kernel: (out_channels, in_channels, k, k)
+            new_shape = (out_channels, ci, h, w)
+            sub_kernel = torch.zeros(new_shape)
+            nn.init.kaiming_normal_(sub_kernel, mode='fan_in', nonlinearity='relu')
+            
+            # Repeat sub-kernel across the checkerboard grid
+            kernel = sub_kernel.repeat(upscale_factor**2, 1, 1, 1)
+            weight.copy_(kernel)
+            
+            # Reset bias
+            if conv.bias is not None:
+                nn.init.constant_(conv.bias, 0)
 
     def forward(self, x):
         """
         Args:
             x: (B, num_patches, embed_dim)
         Returns:
-            K: (B, 3, H, W) — the unified physics parameter
+            map: (B, 4, H, W) -> [K_mask, ΔR, ΔG, ΔB]
         """
         B = x.shape[0]
         x = self.proj(x)
@@ -287,9 +371,13 @@ class SpatialReconstruction(nn.Module):
         # Unflatten: (B, L, D) → (B, D, grid, grid)
         x = x.transpose(1, 2).reshape(B, self.embed_dim, self.grid_size, self.grid_size)
 
-        # CNN refinement → K(x)
-        K = self.refine(x)
-        return K
+        # Multi-Path Reconstruction
+        sharp = self.path_sharp(x)
+        smooth = self.path_smooth(x)
+        
+        # Fuse branches (result is out_channels=4)
+        out = self.fusion(torch.cat([sharp, smooth], dim=1))
+        return out
 
 
 # =============================================================================
@@ -312,8 +400,8 @@ class MambaDehaze(nn.Module):
         n_layers: number of stacked Vim blocks (default 4)
         dropout: dropout rate
     """
-    def __init__(self, img_size=256, patch_size=8, embed_dim=64,
-                 d_state=16, n_layers=4, dropout=0.1):
+    def __init__(self, img_size=256, patch_size=8, embed_dim=128,
+                 d_state=16, n_layers=6, dropout=0.1):
         super().__init__()
 
         self.img_size = img_size
@@ -332,28 +420,27 @@ class MambaDehaze(nn.Module):
             for _ in range(n_layers)
         ])
 
-        # Stage 3: Spatial Reconstruction → K(x)
+        # Stage 3: Spatial Reconstruction → K_mask(x) + ΔJ(x)
         self.spatial_head = SpatialReconstruction(
             embed_dim=embed_dim,
             img_size=img_size,
             patch_size=patch_size,
-            out_channels=6  # 3 for K, 3 for Delta
+            out_channels=4  # 1 for K_mask, 3 for Delta
         )
+
+        # Stage 4: Global Atmosphere Head → C_atm
+        self.atm_head = GlobalAtmosphereHead(embed_dim=embed_dim)
 
     def forward(self, hazy_input, return_maps=False):
         """
-        Physics-Neural Hybrid Forward Pass
+        Adaptive Physics-Neural Hybrid Forward Pass (V3)
         ================================================
         1. Process input via Vision Mamba Backbone.
-        2. Predict Physics Head (K) and Refinement Head (ΔJ).
-        3. Compute Physics Coarse: J_aod = K*I - K + 1.
-        4. Fuse: J_final = clamp(J_aod + ΔJ, 0, 1).
-
-        Args:
-            hazy_input: (B, 3, H, W)
-            return_maps: If True, returns (final, physics, refinement)
-        Returns:
-            j_pred: (B, 3, H, W) restored output
+        2. Predict Global Atmosphere Color (C_atm).
+        3. Predict Spatial Transmission Mask (K_mask) and Refinement (ΔJ).
+        4. Hybrid Physics: K(x) = K_mask(x) * C_atm.
+        5. Physics Coarse: J_aod = K*I - K + 1.
+        6. Fuse: J_final = torch.clamp(J_aod + ΔJ, 0, 1).
         """
         # --- 1. Mamba Backbone ---
         x = self.patch_embed(hazy_input)               # (B, L, D)
@@ -361,29 +448,43 @@ class MambaDehaze(nn.Module):
         for block in self.vim_blocks:
             x = block(x)                                # (B, L, D)
 
-        # --- 2. Dual-Head Prediction ---
-        out = self.spatial_head(x)                      # (B, 6, H, W)
+        # --- 2. Adaptive Physics Heads ---
+        # A. Global Color Vector (Assignable channels)
+        c_atm = self.atm_head(x)                        # (B, 3, 1, 1)
 
-        # Ensure spatial size matches input
+        # B. Spatial Heads (Mask + Residuals)
+        out = self.spatial_head(x)                      # (B, 4, H, W)
+
+        # Rescale if needed
         if out.shape[2:] != hazy_input.shape[2:]:
             out = F.interpolate(out, size=hazy_input.shape[2:],
                                 mode='bilinear', align_corners=False)
 
-        # Split into K (Physics) and Delta (Refining)
-        # K uses sigmoid to constrain to (0, 1) for AOD stability
-        # Delta uses tanh to constrain to (-1, 1) for additive/subtractive correction
-        K = torch.sigmoid(out[:, :3, :, :])
-        delta = torch.tanh(out[:, 3:, :, :])
+        # --- 3. Composite Physics Formulation (Force FP32) ---
+        # Moving to FP32 for sensitive physics math to prevent mixed-precision divergence
+        hazy_f32 = hazy_input.float()
+        out_f32 = out.float()
+        c_atm_f32 = c_atm.float()
 
-        # --- 3. Physics Guided Fusion ---
-        # Coarse AOD output
-        j_aod = K * hazy_input - K + 1.0
+        # K_mask (geometry of haze)
+        # Expansion: Scale by 10.0 to allow K > 1.0 (required for dehazing)
+        k_mask = torch.sigmoid(out_f32[:, 0:1, :, :]) * 10.0  # (B, 1, H, W)
+        
+        # Adaptive K(x): Image-wide color consistency + Spatial geometry
+        K = k_mask * c_atm_f32                              # (B, 3, H, W)
 
-        # Final refined output
+        # Refinement residuals (scaled for stability)
+        delta = torch.tanh(out_f32[:, 1:4, :, :]) * 0.1     # (B, 3, H, W)
+
+        # --- 4. Physics Reconstruction ---
+        j_aod = K * hazy_f32 - K + 1.0                # (B, 3, H, W)
         j_pred = torch.clamp(j_aod + delta, 0.0, 1.0)
 
+        # Cast back to input dtype for trainer consistency
+        j_pred = j_pred.to(hazy_input.dtype)
+
         if return_maps:
-            return j_pred, torch.clamp(j_aod, 0, 1), delta
+            return j_pred, torch.clamp(j_aod, 0, 1).to(hazy_input.dtype), delta.to(hazy_input.dtype)
 
         return j_pred
 

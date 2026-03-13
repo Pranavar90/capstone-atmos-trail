@@ -1,7 +1,7 @@
-# Capstone: End-to-End Vision Mamba (Vim) Dehazing Architecture
+# Capstone: End-to-End All-Weather Vision Mamba (Vim) Restoration Architecture
 **Experimental Branch:** `Visionmambatrainingready`
 
-This repository branch preserves a state-of-the-art research implementation for Single Image Dehazing. It utilizes a **Vision Mamba (SSM)** backbone to achieve global image context understanding with linear complexity, solving the performance bottlenecks of Transformers and the receptive field limitations of traditional CNNs.
+This repository branch preserves a state-of-the-art research implementation for **Single Image All-Weather Restoration**. It utilizes a **Vision Mamba (SSM)** backbone to achieve global image context understanding with linear complexity, solving the performance bottlenecks of Transformers and the receptive field limitations of traditional CNNs.
 
 ---
 
@@ -17,18 +17,27 @@ Our architecture leverages **State Space Models (SSM)** to scan image patches as
 
 We employ a **Physics-Guided Hybrid Architecture**:
 1.  **Vision Mamba Backbone**: Extracts global spatiotemporal features.
-2.  **Physics Branch ($K$)**: Predicts the AOD-Net parameter for atmospheric scattering stability.
-3.  **Refinement Branch ($\Delta J$)**: Predicts a neural residual correction to fix sky blowouts and preserve fine textures.
+2.  **Physics Branch ($K$)**: Predicts the AOD-Net parameter for atmospheric scattering (haze/fog/snow) stability.
+3.  **Refinement Branch ($\Delta J$)**: Predicts a neural residual correction to fix sky blowouts, remove rain streaks, and preserve fine textures.
+4.  **Multi-Path Reconstruction**: Combines **ICNR-initialized PixelShuffle** (sharp) and Bicubic (smooth) paths to eliminate checkerboard artifacts.
+5.  **All-Weather Robustness**: Trained on a 30,000+ image superset including MCASD (night/glow), CSD (snow), and Rain100 (rain).
 
 ```mermaid
 graph TD
     A[Hazy Input I] --> B[Patch Embedding]
     B --> C[Bi-Directional Vision Mamba Blocks]
-    C --> D[Dual-Head Reconstruction]
+    C --> D[Multi-Path Reconstruction]
+    
+    subgraph "Upsampling Engine"
+    D --> D1[PixelShuffle: Sharpness]
+    D --> D2[Bicubic: Smoothness]
+    D1 --> D3[Feature Fusion]
+    D2 --> D3
+    end
     
     subgraph "Dual-Branch Output"
-    D --> E[Physics Head: K map]
-    D --> F[Refinement Head: Residual Map]
+    D3 --> E[Physics Head: K map]
+    D3 --> F[Refinement Head: Residual Map]
     end
     
     subgraph "Physics Guided Fusion"
@@ -74,13 +83,13 @@ The model requires pairs of (Hazy, Ground-Truth) images.
     ```bash
     python download_datasets.py
     ```
-    *This downloads the Haze1k, RS-Haze, and Thesis datasets (SOTS, NH-HAZE, etc.)*
+    *Downloads Haze1k, RS-Haze (optional), Rain, Snow, and MCASD (Night/Glow) datasets.*
 
-2.  **Dataset Pre-Processing**:
+2.  **Dataset Pre-Processing (WSL Optimized)**:
     ```bash
     python process_data.py
     ```
-    *Crops and resizes 15,000+ images to 256x256. Required for GPU efficiency.*
+    *Crops and resizes 30,000+ images to 256x256. Stores processed data in WSL ext4 (`~/capstone-data/processed`) for maximum IO performance.*
 
 ### Step C: Training Operations
 

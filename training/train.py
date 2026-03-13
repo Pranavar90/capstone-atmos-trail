@@ -18,21 +18,21 @@ from torchvision import transforms
 # ========================
 # Hyperparameters
 # ========================
-EPOCHS = 125
-LEARNING_RATE = 2e-4
-BATCH_SIZE = 128          # Maximizing ~2.5 GB+ VRAM usage as requested
+EPOCHS = 50
+LEARNING_RATE = 2e-5      # Restoration LR for Physics V6
+BATCH_SIZE = 48           # Optimized for regularization & 48GB VRAM
 IMAGE_SIZE = 256
 USE_MIXED_PRECISION = True
-GRAD_ACCUM_STEPS = 2     # Effective batch = 4 * 2 = 8
-NUM_WORKERS = 8         # Intel Xeon — use more cores for fast data loading
+GRAD_ACCUM_STEPS = 1      # 64 is a solid effective batch; no accumulation needed
+NUM_WORKERS = 8           # Increasing workers for high throughput
 SEED = 42
-# Data root: WSL native ext4 filesystem (fast!) rather than /mnt/c/ NTFS bridge
+# Data root: WSL native ext4 filesystem (fast!) 
 DATA_ROOT = os.path.expanduser("~/capstone-data/processed")
-WARMUP_EPOCHS = 5
-EMBED_DIM = 128           # SSM embedding dimension
-N_LAYERS = 8             # Number of Vim blocks
-D_STATE = 32             # SSM hidden state size
-GRAD_CLIP_NORM = 1.0     # Extreme clipping for SSM stability
+WARMUP_EPOCHS = 5         # Fast wakeup for V6 Full Math
+EMBED_DIM = 128           # Restoration capacity
+N_LAYERS = 6              # Restoration depth
+D_STATE = 16              # 16 states per channel
+GRAD_CLIP_NORM = 0.5     # Aggressive clipping to prevent NaNs
 
 random.seed(SEED)
 torch.manual_seed(SEED)
@@ -109,9 +109,9 @@ def run_training():
         'weight_decay': 1e-4,
         'dropout': 0.1,
         'w_l1': 1.0,
-        'w_ssim': 0.5,
-        'w_cr': 0.1,
-        'w_perc': 0.1,
+        'w_ssim': 0.8,    # Increased for structural priority
+        'w_cr': 0.01,     # Lowered for initial stability
+        'w_perc': 0.05,    # Lowered for initial stability
     }
 
     # --- Datasets ---

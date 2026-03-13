@@ -92,7 +92,7 @@ const ComparisonSlider = ({ before, after }) => {
 const PIPELINE_STAGES = [
     { id: 0, label: 'Extracting Patches', sub: 'Conv2D · Stride 16 · Tokenization', color: '#f97316' },
     { id: 1, label: 'Vision Mamba Engine', sub: 'Bi-VMamba · Global context scan', color: '#3b82f6' },
-    { id: 2, label: 'Dual-Head Prediction', sub: 'K-map (Physics) + Delta (Refiner)', color: '#8b5cf6' },
+    { id: 2, label: 'Multi-Path Reconstruction', sub: 'PixelShuffle + Bicubic Fusion', color: '#8b5cf6' },
     { id: 3, label: 'Physics Map (AOD)', sub: 'Coarse atmospheric restoration', color: '#f59e0b' },
     { id: 4, label: 'Refinement Map', sub: 'Neural detail & color correction', color: '#ec4899' },
     { id: 5, label: 'Hybrid Fusion', sub: 'J = clamp(Physics + Refined, 0, 1)', color: '#10b981' },
@@ -309,8 +309,8 @@ const ArchDiagram = () => (
             <div className="arch-node">
                 <span className="arch-node-badge">STAGE 03</span>
                 <div className="arch-box embed" style={{ background: 'rgba(168,85,247,0.08)', borderColor: 'rgba(168,85,247,0.25)', color: '#c084fc' }}>
-                    <div className="arch-box-label">Dual-Head Head</div>
-                    <div className="arch-box-sub">K Branch + Refine Branch</div>
+                    <div className="arch-box-label">Multi-Path Reconstruction</div>
+                    <div className="arch-box-sub">Shuffle + Bicubic Fusion</div>
                 </div>
             </div>
 
@@ -365,7 +365,8 @@ const SystemTab = ({ status }) => {
     const [result, setResult] = useState(null);
     const [physicsMap, setPhysicsMap] = useState(null);
     const [refineMap, setRefineMap] = useState(null);
-    const [activeView, setActiveView] = useState('final'); // 'final', 'physics', or 'refinement'
+    const [activeView, setActiveView] = useState('final');
+    const [sidebarTab, setSidebarTab] = useState('controls'); // 'controls' or 'breakdown'
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const fileInputRef = useRef(null);
@@ -424,9 +425,55 @@ const SystemTab = ({ status }) => {
     return (
         <div className="system-layout fade-in">
             {/* ─ Sidebar ─ */}
-            <aside className="sidebar">
+            <aside className="sidebar" style={{ padding: 0 }}>
+                {/* Sidebar Sub-Tabs */}
+                <div style={{ 
+                    display: 'flex', 
+                    padding: '16px 16px 0 16px', 
+                    gap: 8, 
+                    borderBottom: '1px solid var(--border)',
+                    background: 'var(--bg-surface)' 
+                }}>
+                    <button 
+                        onClick={() => setSidebarTab('controls')}
+                        style={{ 
+                            padding: '10px 14px', 
+                            fontSize: 10, 
+                            fontWeight: 700, 
+                            letterSpacing: '0.1em',
+                            border: 'none',
+                            background: 'transparent',
+                            color: sidebarTab === 'controls' ? 'var(--accent-blue)' : 'var(--text-dim)',
+                            borderBottom: `2px solid ${sidebarTab === 'controls' ? 'var(--accent-blue)' : 'transparent'}`,
+                            cursor: 'pointer'
+                        }}
+                    >
+                        MAIN CONTROLS
+                    </button>
+                    {result && (
+                        <button 
+                            onClick={() => setSidebarTab('breakdown')}
+                            style={{ 
+                                padding: '10px 14px', 
+                                fontSize: 10, 
+                                fontWeight: 700, 
+                                letterSpacing: '0.1em',
+                                border: 'none',
+                                background: 'transparent',
+                                color: sidebarTab === 'breakdown' ? 'var(--accent-green)' : 'var(--text-dim)',
+                                borderBottom: `2px solid ${sidebarTab === 'breakdown' ? 'var(--accent-green)' : 'transparent'}`,
+                                cursor: 'pointer'
+                            }}
+                        >
+                            DETAILED BREAKDOWN
+                        </button>
+                    )}
+                </div>
 
-                {/* Module 01: Input Control */}
+                <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14, overflowY: 'auto', flex: 1 }}>
+                    {sidebarTab === 'controls' ? (
+                        <>
+                            {/* Module 01: Input Control */}
                 <div className="panel">
                     <div className="panel-header">
                         <Upload size={12} />
@@ -529,12 +576,42 @@ const SystemTab = ({ status }) => {
                     </div>
                 </div>
 
-                {/* Module 03: Info */}
-                <div className="alert info" style={{ margin: 0 }}>
-                    <Database size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                    <span>Output is upsampled back to input resolution via Lanczos interpolation post-inference.</span>
-                </div>
+                        </>
+                    ) : (
+                        <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            <div style={{ fontSize: 11, color: 'var(--text-mid)', lineHeight: 1.5, background: 'rgba(16,185,129,0.05)', padding: 12, borderRadius: 8, border: '1px solid rgba(16,185,129,0.1)' }}>
+                                <FlaskConical size={14} style={{ marginBottom: 8, display: 'block' }} />
+                                Below is the step-by-step logic used by the <b>Atmos-Mamba Hybrid</b> to clear your photo.
+                            </div>
 
+                            {[
+                                { src: preview, name: '01. Original Photo', desc: 'The hazy image you uploaded.', id: 'input' },
+                                { src: physicsMap, name: '02. Physics Layer', desc: 'Step 1: Using optics math to clear the bulk of the haze.', id: 'physics' },
+                                { src: refineMap, name: '03. Neural Repair', desc: 'Step 2: AI looks for and fixes small details missed by math.', id: 'refinement' },
+                                { src: result, name: '04. Final Enhanced', desc: 'The finished, atmospheric-clear result.', id: 'final', glow: true },
+                            ].map((s) => (
+                                <div 
+                                    key={s.id} 
+                                    onClick={() => setActiveView(s.id)}
+                                    style={{ 
+                                        padding: 10, 
+                                        background: 'var(--bg-raised)', 
+                                        borderRadius: 8, 
+                                        border: `1px solid ${activeView === s.id ? (s.glow ? 'var(--accent-green)' : 'var(--accent-blue)') : 'var(--border)'}`,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s ease'
+                                    }}
+                                >
+                                    <div style={{ height: 100, background: '#000', borderRadius: 4, overflow: 'hidden', marginBottom: 8 }}>
+                                        <img src={s.src} style={{ width: '100%', height: '100%', objectFit: 'contain' }} alt={s.name} />
+                                    </div>
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: s.glow ? 'var(--accent-green)' : 'var(--text-primary)' }}>{s.name}</div>
+                                    <div style={{ fontSize: 9, color: 'var(--text-dim)', marginTop: 4 }}>{s.desc}</div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
             </aside>
 
             {/* ─ Viewport ─ */}
@@ -591,82 +668,16 @@ const SystemTab = ({ status }) => {
                 )}
 
                 {result && (
-                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                        <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
-                            <ComparisonSlider 
-                                key={activeView}
-                                before={preview} 
-                                after={
-                                    activeView === 'physics' ? physicsMap :
-                                    activeView === 'refinement' ? refineMap : 
-                                    result
-                                } 
-                            />
-                        </div>
-                        
-                        {/* Process Breakdown Section */}
-                        <div style={{ 
-                            padding: '16px 24px', 
-                            background: 'rgba(7,7,7,0.8)', 
-                            borderTop: '1px solid var(--border)',
-                            backdropFilter: 'blur(10px)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 12
-                        }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <FlaskConical size={14} style={{ color: '#3b82f6' }} />
-                                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>
-                                    Vision Mamba Hybrid Process Breakdown · Click to View
-                                </span>
-                            </div>
-                            
-                            <div style={{ display: 'flex', gap: 10 }}>
-                                {[
-                                    { id: 'input', src: preview, label: '01. Input (I)', sub: 'Hazy Source' },
-                                    { id: 'physics', src: physicsMap, label: '02. Physics (J_aod)', sub: 'Coarse AOD Map' },
-                                    { id: 'refinement', src: refineMap, label: '03. Refiner (ΔJ)', sub: 'Neural Correction' },
-                                    { id: 'final', src: result, label: '04. Fusion (J)', sub: 'Final Adaptive', highlight: true },
-                                ].map((step) => {
-                                    const isActive = activeView === step.id || (step.id === 'input' && activeView === 'input');
-                                    // Special case: clicking input doesn't change slider 'after', but we'll allow it for UI consistency
-                                    return (
-                                        <div 
-                                            key={step.id} 
-                                            onClick={() => {
-                                                if (step.id !== 'input') {
-                                                    console.log(`Switching view to: ${step.id}`);
-                                                    setActiveView(step.id);
-                                                }
-                                            }}
-                                            style={{ 
-                                                flex: 1, 
-                                                background: isActive ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg-raised)', 
-                                                border: `1px solid ${isActive ? (step.highlight ? '#10b981' : '#3b82f6') : 'var(--border)'}`,
-                                                borderRadius: 6,
-                                                overflow: 'hidden',
-                                                cursor: step.id === 'input' ? 'default' : 'pointer',
-                                                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                                                display: 'flex',
-                                                flexDirection: 'column',
-                                                opacity: (step.id === 'input' || !step.src) ? 0.5 : 1,
-                                                transform: isActive ? 'scale(1.02)' : 'none',
-                                                boxShadow: isActive ? `0 4px 20px ${step.highlight ? '#10b98140' : '#3b82f640'}` : 'none',
-                                                zIndex: isActive ? 10 : 1
-                                            }}
-                                        >
-                                            <div style={{ height: 75, background: '#000', position: 'relative' }}>
-                                                <img src={step.src} alt={step.label} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                                            </div>
-                                            <div style={{ padding: '6px 10px' }}>
-                                                <div style={{ fontSize: 9, fontWeight: 700, color: step.highlight ? '#10b981' : (isActive ? '#3b82f6' : 'var(--text-mid)'), whiteSpace: 'nowrap' }}>{step.label}</div>
-                                                <div style={{ fontSize: 8, color: 'var(--text-dimmer)', marginTop: 1 }}>{step.sub}</div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
+                    <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                        <ComparisonSlider 
+                            key={activeView}
+                            before={preview} 
+                            after={
+                                activeView === 'physics' ? physicsMap :
+                                activeView === 'refinement' ? refineMap : 
+                                result
+                            } 
+                        />
                     </div>
                 )}
             </div>
@@ -1032,12 +1043,12 @@ const OverviewTab = () => {
                         <span className="overview-version-badge" style={{ color: 'var(--accent-green)', borderColor: 'rgba(16,185,129,0.25)' }}>ACTIVE</span>
                     </div>
                     <h1 className="overview-title">
-                        Vision Mamba<br />Neural Dehazing System
+                        Vision Mamba<br />All-Weather Restoration System
                     </h1>
                     <p className="overview-sub">
-                        A State Space Model (SSM) architecture for single-image haze removal.
-                        Combines bi-directional Mamba scanning with AOD physics reconstruction,
-                        achieving global context understanding at linear O(N) complexity.
+                        A State Space Model (SSM) architecture for single-image all-weather restoration.
+                        Combines bi-directional Mamba scanning with AOD physics reconstruction, capable
+                        of removing haze, fog, rain streaks, snow, and night-time artifacts.
                     </p>
                 </div>
                 <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
@@ -1093,6 +1104,7 @@ const OverviewTab = () => {
                         { label: 'Num Blocks', value: '4', unit: 'Bi-VMamba layers' },
                         { label: 'Batch Size', value: '14', unit: 'GPU: RTX 3050 4GB' },
                         { label: 'Grad Clip', value: '0.5', unit: 'max_norm — SSM stability' },
+                        { label: 'Tuner', value: 'Auto-HPO', unit: 'Random Search / Optuna' },
                     ].map(s => (
                         <div className="spec-card" key={s.label}>
                             <div className="spec-card-label">{s.label}</div>
@@ -1195,8 +1207,8 @@ const OverviewTab = () => {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
                     {[
                         { name: 'Thesis Composite', size: '~15,800 pairs', detail: 'NH-HAZE · I-HAZE · O-HAZE · Dense-Haze · SOTS · BeDDE', color: '#3b82f6' },
-                        { name: 'Haze1k', size: '~3,600 pairs', detail: 'Thin · Moderate · Thick variants', color: '#8b5cf6' },
-                        { name: 'RS-Haze', size: '~2,000 pairs', detail: 'Remote sensing dehazing benchmark', color: '#f59e0b' },
+                        { name: 'Weather Superset', size: '~10,500 pairs', detail: 'Rain100 (Rain) · CSD (Snow) · MCASD (Night/Glow)', color: '#8b5cf6' },
+                        { name: 'Haze1k', size: '~3,600 pairs', detail: 'Thin · Moderate · Thick variants (Satellite)', color: '#f59e0b' },
                     ].map(d => (
                         <div key={d.name} style={{ background: 'var(--bg-raised)', border: '1px solid var(--border)', borderLeft: `2px solid ${d.color}`, borderRadius: 8, padding: '14px 16px' }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>{d.name}</div>
@@ -1206,7 +1218,7 @@ const OverviewTab = () => {
                     ))}
                     <div style={{ background: 'var(--bg-raised)', border: '1px solid var(--border)', borderLeft: '2px solid var(--accent-green)', borderRadius: 8, padding: '14px 16px' }}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Total Pipeline</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent-green)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>~21,400 pairs</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent-green)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>~30,000+ pairs</div>
                         <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.5 }}>80% Train · 10% Val · 10% Test</div>
                     </div>
                 </div>
@@ -1254,8 +1266,8 @@ export default function App() {
                         <ScanLine size={14} color="#fff" />
                     </div>
                     <div>
-                        <div className="brand-title">Neural Dehazing System</div>
-                        <div className="brand-sub">VIM-DHZ · 2026 Capstone</div>
+                        <div className="brand-title">All-Weather Restoration</div>
+                        <div className="brand-sub">VIM-WTH · 2026 Capstone</div>
                     </div>
                 </div>
 

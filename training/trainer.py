@@ -95,12 +95,12 @@ class MambaDehazeTrainer:
         params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"[Model] MambaDehaze — {params:,} trainable parameters")
 
-        # --- Loss ---
+        # Optimized weights for stability: prioritize L1/SSIM over noisy perceptual contrastive
         self.criterion = MambaDehazeLoss(
             w_l1=config.get('w_l1', 1.0),
-            w_ssim=config.get('w_ssim', 0.5),
-            w_cr=config.get('w_cr', 0.1),
-            w_perc=config.get('w_perc', 0.1)
+            w_ssim=config.get('w_ssim', 0.8),
+            w_cr=config.get('w_cr', 0.01),
+            w_perc=config.get('w_perc', 0.05)
         ).to(self.device)
 
         # --- Optimizer ---

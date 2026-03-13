@@ -35,8 +35,10 @@ if __name__ == "__main__":
     # Handle datasets from Kaggle
     kaggle_datasets = {
         "haze1k": "mohit3430/haze1k-full",
-        # "rshaze": "lxfbystander/rs-haze-dataset", # Skipping this large dataset per user request
-        "thesis": "hemanthhari/dehazing-dataset-thesis"
+        "thesis": "hemanthhari/dehazing-dataset-thesis",
+        "rain": "adeshpal/image-deraining",
+        "snow": "bonnieo/csdd20220331",
+        "all_weather": "ajithdari/multi-condition-atmospheric-scene-dataset-mcasd"
     }
 
     for name, ds_id in kaggle_datasets.items():

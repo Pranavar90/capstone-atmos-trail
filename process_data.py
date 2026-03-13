@@ -86,6 +86,38 @@ def get_image_pairs(root_dir, ds_name):
                         if f.endswith(('.png', '.jpg')):
                             pairs.append((os.path.join(hazy_dir, f), gt_path))
 
+    elif ds_name == "rain":
+        # Format: RainyImages/ matches GroundTruth/
+        hazy_dir = os.path.join(root_dir, "rain", "RainyImages")
+        gt_dir = os.path.join(root_dir, "rain", "GroundTruth")
+        if os.path.exists(hazy_dir):
+            for f in os.listdir(hazy_dir):
+                if f.endswith(('.png', '.jpg')):
+                    pairs.append((os.path.join(hazy_dir, f), os.path.join(gt_dir, f)))
+
+    elif ds_name == "snow":
+        # CSD dataset: Snow/ matches Ground_Truth/
+        hazy_dir = os.path.join(root_dir, "snow", "Snow")
+        gt_dir = os.path.join(root_dir, "snow", "Ground_Truth")
+        if os.path.exists(hazy_dir):
+            for f in os.listdir(hazy_dir):
+                if f.endswith(('.png', '.jpg')):
+                    pairs.append((os.path.join(hazy_dir, f), os.path.join(gt_dir, f)))
+
+    elif ds_name == "all_weather":
+        # MCASD: multi-condition folders
+        base_dir = os.path.join(root_dir, "all_weather")
+        if os.path.exists(base_dir):
+            # MCASD structure usually has subfolders for conditions
+            for root, dirs, files in os.walk(base_dir):
+                if "hazy" in root.lower() or "rainy" in root.lower() or "snowy" in root.lower():
+                    # Attempt to find corresponding clear/GT folder
+                    clear_root = root.replace("hazy", "clear").replace("Hazy", "Clear").replace("rainy", "clear").replace("snowy", "clear")
+                    if os.path.exists(clear_root):
+                        for f in files:
+                            if f.endswith(('.png', '.jpg', '.jpeg')):
+                                pairs.append((os.path.join(root, f), os.path.join(clear_root, f)))
+
     return pairs
 
 def process_image(args):
@@ -108,15 +140,16 @@ def process_image(args):
 
 def process_dataset(image_size=256):
     raw_dir = "data/raw"
-    processed_dir = "data/processed"
+    # SUCCESS: Store in WSL home (ext4) instead of Windows NTFS (/mnt/c/...)
+    processed_dir = os.path.expanduser("~/capstone-data/processed")
     
     all_pairs = []
     
     # 1. Thesis datasets
     thesis_dir = os.path.join(raw_dir, "thesis")
-    for ds in ["NH-HAZE", "I-HAZE", "O-HAZE", "Dense_Haze", "SOTS", "archive(1)", "BeDDE"]:
+    for ds in ["NH-HAZE", "I-HAZE", "O-HAZE", "Dense_Haze", "SOTS", "archive(1)", "BeDDE", "rain", "snow", "all_weather"]:
         print(f"Parsing {ds}...")
-        pairs = get_image_pairs(raw_dir if ds in ["NH-HAZE", "I-HAZE", "O-HAZE"] else raw_dir, ds)
+        pairs = get_image_pairs(raw_dir, ds)
         all_pairs.extend(pairs)
 
     # 2. Haze1k (if downloaded)
